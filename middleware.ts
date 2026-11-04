@@ -1,5 +1,6 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from "@/lib/supabase/config";
 
 const hostOf = (u?: string) => { try { return u ? new URL(u).host : null; } catch { return null; } };
 const APP_HOST = hostOf(process.env.NEXT_PUBLIC_SITE_URL);
@@ -10,9 +11,9 @@ const cache = new Map<string, { slug: string | null; at: number }>();
 async function shopForDomain(host: string) {
   const hit = cache.get(host);
   if (hit && Date.now() - hit.at < 300_000) return hit.slug;
-  const res = await fetch(`${process.env.NEXT_PUBLIC_SUPABASE_URL}/rest/v1/rpc/shop_for_domain`, {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/rpc/shop_for_domain`, {
     method: "POST",
-    headers: { apikey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!, "Content-Type": "application/json" },
+    headers: { apikey: SUPABASE_ANON_KEY, "Content-Type": "application/json" },
     body: JSON.stringify({ p_domain: host }),
   }).catch(() => null);
   const slug = res?.ok ? ((await res.json()) as string | null) : null;
@@ -62,30 +63,38 @@ export async function middleware(request: NextRequest) {
 
   // Refresh the Supabase session cookie and keep /dashboard and /admin behind sign-in.
   let response = NextResponse.next({ request });
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => request.cookies.getAll(),
-        setAll: (toSet) => {
-          toSet.forEach(({ name, value }) => request.cookies.set(name, value));
-          response = NextResponse.next({ request });
-          toSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+  try {
+    const supabase = createServerClient(
+      SUPABASE_URL,
+      SUPABASE_ANON_KEY,
+      {
+        cookies: {
+          getAll: () => request.cookies.getAll(),
+          setAll: (toSet) => {
+            toSet.forEach(({ name, value }) => request.cookies.set(name, value));
+            response = NextResponse.next({ request });
+            toSet.forEach(({ name, value, options }) => response.cookies.set(name, value, options));
+          },
         },
       },
-    },
-  );
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user && (path.startsWith("/dashboard") || path.startsWith("/admin"))) {
-    const url = request.nextUrl.clone();
-    if (path.startsWith("/admin")) {
-      url.pathname = "/admin/login";
-    } else {
-      url.pathname = "/login";
-      url.searchParams.set("next", path);
+    );
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user && (path.startsWith("/dashboard") || path.startsWith("/admin"))) {
+      const url = request.nextUrl.clone();
+      if (path.startsWith("/admin")) {
+        url.pathname = "/admin/login";
+      } else {
+        url.pathname = "/login";
+        url.searchParams.set("next", path);
+      }
+      return NextResponse.redirect(url);
     }
-    return NextResponse.redirect(url);
+  } catch {
+    if (path.startsWith("/dashboard") || path.startsWith("/admin")) {
+      const url = request.nextUrl.clone();
+      url.pathname = path.startsWith("/admin") ? "/admin-login" : "/login";
+      return NextResponse.redirect(url);
+    }
   }
   return response;
 }
