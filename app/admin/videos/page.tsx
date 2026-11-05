@@ -27,7 +27,7 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
 
   return (
     <>
-      <PageHeader n={adminNum("/admin/videos")} title="Video uploads" sub={`Upload each client"s finished clips. They choose from their library and their picks show here.`} />
+      <PageHeader n={adminNum("/admin/videos")} title="Video uploads" sub="Upload each client's finished clips and photos. They pick or schedule them from their Content library, and their picks show here." />
       {sp.msg && <p className="ok">{sp.msg}</p>}
 
       <div className="card table-wrap" style={{ padding: 0 }}>
@@ -68,10 +68,13 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
                   {(clips ?? []).map((c) => (
                     <form key={c.id} action={updateClip} className="card stack" style={{ padding: 12 }}>
                       <input type="hidden" name="id" value={c.id} />
-                      {urlFor(c.storage_path) ? <video src={urlFor(c.storage_path)} controls preload="metadata" style={{ width: "100%", aspectRatio: "9 / 16", objectFit: "cover", borderRadius: 10, background: "#000" }} /> : null}
+                      {urlFor(c.storage_path) ? (c.kind === "image"
+                        ? <img src={urlFor(c.storage_path)} alt={c.title} style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 10, background: "#000" }} />
+                        : <video src={urlFor(c.storage_path)} controls preload="metadata" style={{ width: "100%", aspectRatio: "9 / 16", objectFit: "cover", borderRadius: 10, background: "#000" }} />) : null}
                       <div className="row" style={{ justifyContent: "space-between" }}>
                         <span className={`badge ${c.status === "published" ? "paid" : c.status === "hidden" ? "resolved" : "sent"}`}>{c.status}</span>
                         {c.chosen && <span className="badge paid">Client chose this</span>}
+                        {c.skipped && <span className="badge resolved">Client skipped</span>}
                         {c.seconds && <span className="muted">{c.seconds}s</span>}
                       </div>
                       <label>Title<input name="title" defaultValue={c.title} /></label>

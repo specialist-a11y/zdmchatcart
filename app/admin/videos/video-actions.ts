@@ -34,14 +34,15 @@ export async function getUploadUrl(shootId: string, fileName: string) {
 }
 
 /** Step 2: record the clip once the file is in storage. */
-export async function registerClip(shootId: string, path: string, title: string, seconds: number | null) {
+export async function registerClip(shootId: string, path: string, title: string, seconds: number | null, kind: "video" | "image" = "video") {
   await requireStaff();
   const admin = createAdminClient();
   const { data: shoot } = await admin.from("video_shoots").select("id, business_id, published_at").eq("id", shootId).single();
   if (!shoot || !path.startsWith(`${shoot.business_id}/${shoot.id}/`)) return { error: "Bad upload path" };
   const { error } = await admin.from("video_clips").insert({
     business_id: shoot.business_id, shoot_id: shoot.id, storage_path: path, title: title.slice(0, 120) || "Clip",
-    seconds: seconds && seconds > 0 ? Math.min(600, Math.round(seconds)) : null,
+    seconds: kind === "video" && seconds && seconds > 0 ? Math.min(600, Math.round(seconds)) : null,
+    kind: kind === "image" ? "image" : "video", source: "zdm",
     status: shoot.published_at ? "published" : "ready",
   });
   return error ? { error: error.message } : { ok: true };
@@ -83,7 +84,7 @@ export async function publishShoot(f: FormData) {
   if (f.get("notify") === "on") {
     const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
     const { data: b } = await admin.from("businesses").select("slug").eq("id", shoot!.business_id).single();
-    const res = await notifyClient(admin, shoot!.business_id, `Your ${month} videos are ready: ${n} new clips. Pick the ones you want posted here: ${site}/dashboard/${b?.slug}/videos`, { id: staff.user_id, name: staff.name });
+    const res = await notifyClient(admin, shoot!.business_id, `Your ${month} videos are ready: ${n} new clips. Pick or schedule them here: ${site}/dashboard/${b?.slug}/content`, { id: staff.user_id, name: staff.name });
     note += res.ok ? " and told the client on WhatsApp" : `. WhatsApp not sent: ${res.error}`;
   }
   redirect(`/admin/videos?client=${shoot!.business_id}&shoot=${shootId}&msg=${encodeURIComponent(note)}`);

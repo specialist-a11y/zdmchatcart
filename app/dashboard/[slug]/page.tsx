@@ -23,7 +23,7 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
     supabase.from("messages").select("customer_id, direction, created_at, body, customers(name, phone)").eq("business_id", business.id).gte("created_at", new Date(now - 7 * DAY).toISOString()).order("created_at", { ascending: false }).limit(400),
     supabase.from("customers").select("id", { count: "exact", head: true }).eq("business_id", business.id).gte("created_at", new Date(now - 7 * DAY).toISOString()),
     supabase.from("ad_campaigns").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "needs_approval"),
-    supabase.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "published").eq("chosen", false),
+    supabase.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "published").eq("chosen", false).eq("source", "zdm"),
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "awaiting_confirmation"),
   ]);
   const all = (orders ?? []) as unknown as OrderLite[];
@@ -68,7 +68,7 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
     noPhone && { icon: "orders", t: `${noPhone} order${noPhone > 1 ? "s need" : " needs"} confirming`, d: "Started on the website, not confirmed in WhatsApp yet.", go: "Review", href: `${base}/orders?status=awaiting_confirmation` },
     awaiting.length && { icon: "card", t: `${awaiting.length} payment link${awaiting.length > 1 ? "s" : ""} not paid yet`, d: `${money(sum(awaiting), business.currency)} waiting.`, go: "See orders", href: `${base}/orders?status=awaiting_payment` },
     adsOk && { icon: "ads", t: `${adsOk} ad${adsOk > 1 ? "s need" : " needs"} your OK`, d: "ZDMINC is ready to launch.", go: "Approve", href: `${base}/ads` },
-    toChoose && { icon: "videos", t: `${toChoose} video${toChoose > 1 ? "s" : ""} not chosen yet`, d: "Pick the ones you want posted.", go: "Choose", href: `${base}/videos` },
+    toChoose && { icon: "videos", t: `${toChoose} ZDMINC clip${toChoose > 1 ? "s" : ""} not picked yet`, d: "Pick the ones you want posted, or schedule them yourself.", go: "Choose", href: `${base}/content` },
   ].filter(Boolean) as { icon: string; t: string; d: string; go: string; href: string }[];
 
   const first = (user.user_metadata?.full_name || user.user_metadata?.name || "").split(" ")[0];

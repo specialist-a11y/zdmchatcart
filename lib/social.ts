@@ -7,7 +7,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
  */
 export const SOCIAL_SCOPES = [
   "pages_show_list", "pages_read_engagement", "business_management",
-  "instagram_basic", "instagram_manage_comments", "instagram_manage_messages", "instagram_content_publish", "pages_manage_metadata", "pages_messaging",
+  "instagram_basic", "instagram_manage_comments", "instagram_manage_messages", "instagram_content_publish", "pages_manage_posts", "pages_manage_metadata", "pages_messaging",
 ];
 
 const ver = () => process.env.META_GRAPH_VERSION || process.env.WHATSAPP_GRAPH_VERSION || "v22.0";

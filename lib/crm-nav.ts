@@ -2,7 +2,7 @@
 export const CLIENT_NAV = [
   ["", "Today", "today"], ["inbox", "Inbox", "inbox"], ["whatsapp", "WhatsApp", "wa"], ["orders", "Orders", "orders"],
   ["customers", "Customers", "customers"], ["products", "Products", "products"], ["marketing", "Marketing", "marketing"], ["autoreplies", "IG auto-replies", "ig"],
-  ["ads", "Ads", "ads"], ["videos", "Videos", "videos"], ["website", "Website", "website"], ["settings", "Settings", "settings"],
+  ["ads", "Ads", "ads"], ["content", "Content", "videos"], ["website", "Website", "website"], ["settings", "Settings", "settings"],
   ["business", "Business info", "studio"], ["billing", "Plan and billing", "card"], ["support", "Help and support", "support"],
 ] as const;
 export const num = (key: string) => CLIENT_NAV.findIndex(([k]) => k === key) + 1;
