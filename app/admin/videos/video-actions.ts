@@ -2,18 +2,20 @@
 
 import { redirect } from "next/navigation";
 import { requireStaff } from "@/lib/staff";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { logEvent, notifyClient } from "@/lib/zdm-billing";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const safeName = (n: string) => n.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "clip.mp4";
+const db = (supabase: Awaited<ReturnType<typeof requireStaff>>["supabase"]) =>
+  hasServiceRoleKey() ? createAdminClient() : supabase;
 
 export async function createShoot(f: FormData) {
-  const { staff } = await requireStaff();
+  const { supabase, staff } = await requireStaff();
   const businessId = str(f, "business_id");
   const month = str(f, "month"); // YYYY-MM
   if (!businessId || !/^\d{4}-\d{2}$/.test(month)) redirect(`/admin/videos?msg=${encodeURIComponent("Pick a client and month")}`);
-  const admin = createAdminClient();
+  const admin = db(supabase);
   const { data: shoot } = await admin.from("video_shoots").insert({
     business_id: businessId, month: `${month}-01`, shoot_date: str(f, "shoot_date") || null, location: str(f, "location") || null, notes: str(f, "notes") || null,
   }).select("id").single();
@@ -23,8 +25,8 @@ export async function createShoot(f: FormData) {
 
 /** Step 1 of an upload: a one-time signed URL so the browser sends the file straight to storage. */
 export async function getUploadUrl(shootId: string, fileName: string) {
-  await requireStaff();
-  const admin = createAdminClient();
+  const { supabase } = await requireStaff();
+  const admin = db(supabase);
   const { data: shoot } = await admin.from("video_shoots").select("id, business_id").eq("id", shootId).single();
   if (!shoot) return { error: "Shoot not found" };
   const path = `${shoot.business_id}/${shoot.id}/${Date.now()}-${safeName(fileName)}`;
@@ -35,8 +37,8 @@ export async function getUploadUrl(shootId: string, fileName: string) {
 
 /** Step 2: record the clip once the file is in storage. */
 export async function registerClip(shootId: string, path: string, title: string, seconds: number | null, kind: "video" | "image" = "video") {
-  await requireStaff();
-  const admin = createAdminClient();
+  const { supabase } = await requireStaff();
+  const admin = db(supabase);
   const { data: shoot } = await admin.from("video_shoots").select("id, business_id, published_at").eq("id", shootId).single();
   if (!shoot || !path.startsWith(`${shoot.business_id}/${shoot.id}/`)) return { error: "Bad upload path" };
   const { error } = await admin.from("video_clips").insert({
@@ -49,8 +51,8 @@ export async function registerClip(shootId: string, path: string, title: string,
 }
 
 export async function updateClip(f: FormData) {
-  await requireStaff();
-  const admin = createAdminClient();
+  const { supabase } = await requireStaff();
+  const admin = db(supabase);
   const id = str(f, "id");
   const status = str(f, "status");
   const patch: Record<string, unknown> = { title: str(f, "title") || "Clip", caption: str(f, "caption") || null };
@@ -60,8 +62,8 @@ export async function updateClip(f: FormData) {
 }
 
 export async function deleteClip(f: FormData) {
-  await requireStaff();
-  const admin = createAdminClient();
+  const { supabase } = await requireStaff();
+  const admin = db(supabase);
   const { data: clip } = await admin.from("video_clips").select("id, business_id, shoot_id, storage_path").eq("id", str(f, "id")).single();
   if (clip) {
     await admin.storage.from("client-videos").remove([clip.storage_path]);
@@ -71,8 +73,8 @@ export async function deleteClip(f: FormData) {
 }
 
 export async function publishShoot(f: FormData) {
-  const { staff } = await requireStaff();
-  const admin = createAdminClient();
+  const { supabase, staff } = await requireStaff();
+  const admin = db(supabase);
   const shootId = str(f, "shoot_id");
   const { data: shoot } = await admin.from("video_shoots").update({ published_at: new Date().toISOString() }).eq("id", shootId).select("id, business_id, month").single();
   if (!shoot) redirect("/admin/videos?msg=Shoot not found");
