@@ -1,6 +1,21 @@
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { redirect } from "next/navigation";
+
+async function claimStaffAccess() {
+  "use server";
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) redirect("/admin-login");
+  const name = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Kat";
+  if (hasServiceRoleKey()) {
+    await createAdminClient()
+      .from("platform_staff")
+      .upsert({ user_id: user.id, name, role: "owner" }, { onConflict: "user_id" });
+    redirect("/admin");
+  }
+}
 
 export default async function AdminSetupPage({
   searchParams,
@@ -12,12 +27,12 @@ export default async function AdminSetupPage({
   const { data: { user } } = await supabase.auth.getUser();
 
   if (!user) {
-    redirect("/login?next=/admin");
+    redirect("/admin-login");
   }
 
   const userId = params.userId || user.id;
   const email = params.email || user.email || "your account";
-  const missingKey = params.missingKey === "1" || !process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const missingKey = params.missingKey === "1" || !hasServiceRoleKey();
 
   const sqlInsert = `insert into public.platform_staff (user_id, name, role)
 values ('${userId}', 'Kat', 'owner')
@@ -85,7 +100,14 @@ on conflict (user_id) do update set role = 'owner';`;
           )}
 
           <div className="row" style={{ marginTop: 12, gap: 12 }}>
-            <Link href="/admin" className="btn">
+            {!missingKey && (
+              <form action={claimStaffAccess}>
+                <button type="submit" className="btn">
+                  Activate My Admin Owner Access →
+                </button>
+              </form>
+            )}
+            <Link href="/admin" className="btn secondary">
               Open Admin (/admin) →
             </Link>
             <Link href="/dashboard" className="btn secondary">

@@ -1,5 +1,15 @@
 import Link from "next/link";
 import { NavLinks, type NavItem } from "./NavLinks";
+import { signOut } from "@/app/auth/actions";
+
+const SignOut = () => (
+  <form action={signOut}>
+    <button className="crm-signout">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></svg>
+      Sign out
+    </button>
+  </form>
+);
 
 export const Logo = ({ sub = "Data-driven growth", link = true }: { sub?: string; link?: boolean }) => {
   const inner = <>
@@ -33,11 +43,11 @@ export function CrmShell({ switcher, nav, footer, children }: {
         <Logo />
         {sw}
         <NavLinks items={nav} />
-        <div className="crm-foot">{footer}<span className="crm-credit">A ZDMINC product · zdminc.com</span></div>
+        <div className="crm-foot">{footer}<SignOut /><span className="crm-credit">A ZDMINC product · zdminc.com</span></div>
       </aside>
       <details className="crm-mbar">
         <summary><Logo link={false} /><span className="crm-menu">Menu</span></summary>
-        <div className="crm-drawer">{sw}<NavLinks items={nav} /><div className="crm-foot">{footer}</div></div>
+        <div className="crm-drawer">{sw}<NavLinks items={nav} /><div className="crm-foot">{footer}<SignOut /></div></div>
       </details>
       <main className="crm-main">{children}</main>
     </div>

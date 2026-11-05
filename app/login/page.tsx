@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 
 /* A looping "chat becomes a paid order" story plays on the left; the magic-link form sits on the right. */
@@ -115,6 +115,8 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [state, setState] = useState<"idle" | "sending" | "sent" | "error">("idle");
   const [error, setError] = useState("");
+  const [signedOut, setSignedOut] = useState(false);
+  useEffect(() => { setSignedOut(new URLSearchParams(window.location.search).has("signedout")); }, []);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -209,6 +211,7 @@ export default function LoginPage() {
         ) : (
           <form onSubmit={onSubmit} className="lg-card">
             <span className="lg-eyebrow"><i /> ZDM ChatCart</span>
+            {signedOut && <p className="ok" role="status" style={{ margin: 0 }}>You've signed out.</p>}
             <h1>Welcome back</h1>
             <p>Enter your email and we&apos;ll send you a magic link. No password needed.</p>
             <label className="lg-field">
@@ -235,7 +238,7 @@ export default function LoginPage() {
               )}
             </button>
             {state === "error" && <p className="lg-err" role="alert">{error}</p>}
-            <p className="lg-fine">🔒 Secure, passwordless sign-in.</p>
+            <p className="lg-fine">🔒 Secure, passwordless sign-in. You'll stay signed in on this device until you sign out.</p>
           </form>
         )}
       </section>

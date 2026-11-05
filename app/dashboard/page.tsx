@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { signOut } from "@/app/auth/actions";
 import { createClient } from "@/lib/supabase/server";
 
 async function createBusiness(formData: FormData) {
@@ -17,13 +18,6 @@ async function createBusiness(formData: FormData) {
   });
   if (error) redirect(`/dashboard?error=${encodeURIComponent(error.message)}`);
   redirect(`/dashboard/${slug}`);
-}
-
-async function signOut() {
-  "use server";
-  const supabase = await createClient();
-  await supabase.auth.signOut();
-  redirect("/login");
 }
 
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ error?: string }> }) {

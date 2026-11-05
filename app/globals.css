@@ -118,6 +118,8 @@ th { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spa
 .crm-foot a { color: var(--blue); }
 .crm-conn { background: rgba(255,255,255,.06); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 6px; }
 .crm-conn span { display: flex; align-items: center; gap: 8px; }
+.crm-signout { display: flex; align-items: center; gap: 10px; width: 100%; padding: 9px 12px; border-radius: 8px; border: 0; background: none; color: #c4ccc8; font-weight: 600; font-size: 14px; cursor: pointer; text-align: left; }
+.crm-signout:hover { background: rgba(255,255,255,.06); color: #fff; }
 .crm-credit { font-size: 11px; color: #64716c; padding: 0 4px; }
 .crm-outline { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; border: 1px solid rgba(61,139,255,.4); color: var(--blue) !important; font-weight: 700; text-decoration: none; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: #64716c; display: inline-block; flex: none; }

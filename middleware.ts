@@ -57,7 +57,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
-  if (!path.startsWith("/dashboard") && !path.startsWith("/admin") && !path.startsWith("/login") && !path.startsWith("/auth") && !path.startsWith("/admin-login")) {
+  if (!path.startsWith("/dashboard") && !path.startsWith("/admin") && !path.startsWith("/login") && !path.startsWith("/auth") && !path.startsWith("/admin-login") && !path.startsWith("/admin-setup")) {
     return NextResponse.next();
   }
 
@@ -79,22 +79,35 @@ export async function middleware(request: NextRequest) {
       },
     );
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user && (path.startsWith("/dashboard") || path.startsWith("/admin"))) {
+    // Copy any refreshed session cookies onto redirects, so a refresh is never lost.
+    const redirectTo = (url: URL) => {
+      const r = NextResponse.redirect(url);
+      response.cookies.getAll().forEach((c) => r.cookies.set(c));
+      return r;
+    };
+    if (!user && (path.startsWith("/dashboard") || (path.startsWith("/admin") && !path.startsWith("/admin-login") && !path.startsWith("/admin-setup")))) {
       const url = request.nextUrl.clone();
+      url.search = "";
       if (path.startsWith("/admin")) {
-        url.pathname = "/admin/login";
+        url.pathname = "/admin-login";
       } else {
         url.pathname = "/login";
-        url.searchParams.set("next", path);
+        url.searchParams.set("next", path + request.nextUrl.search);
       }
-      return NextResponse.redirect(url);
+      return redirectTo(url);
+    }
+    // Already signed in: skip the merchant login form and go straight in.
+    if (user && path === "/login") {
+      const url = request.nextUrl.clone();
+      const next = request.nextUrl.searchParams.get("next") ?? "";
+      const safe = next.startsWith("/") && !next.startsWith("//") ? next : "/dashboard";
+      const target = new URL(safe, url.origin);
+      url.pathname = target.pathname;
+      url.search = target.search;
+      return redirectTo(url);
     }
   } catch {
-    if (path.startsWith("/dashboard") || path.startsWith("/admin")) {
-      const url = request.nextUrl.clone();
-      url.pathname = path.startsWith("/admin") ? "/admin-login" : "/login";
-      return NextResponse.redirect(url);
-    }
+    // Supabase unreachable for a moment: don't sign anyone out. The page checks again itself.
   }
   return response;
 }

@@ -1,10 +1,11 @@
 import "server-only";
-import { notFound, redirect } from "next/navigation";
+import { redirect } from "next/navigation";
 import { createClient } from "./supabase/server";
+import { createAdminClient, hasServiceRoleKey } from "./supabase/admin";
 
 export type Staff = { user_id: string; name: string; role: "owner" | "manager" | "support" | "editor" };
 
-/** The ZDMINC team only. Everyone else gets a 404 so /admin is not advertised. */
+/** The ZDMINC team only. Redirects to /admin-setup if the account isn't registered in platform_staff yet. */
 export async function requireStaff() {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -16,17 +17,40 @@ export async function requireStaff() {
     .maybeSingle<Staff>();
   if (staff) return { supabase, user, staff };
 
+  const defaultName = user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Kat";
+
+  // Auto-bootstrap the first staff owner if platform_staff is empty and service role key is configured:
+  if (hasServiceRoleKey()) {
+    const admin = createAdminClient();
+    const { data: existing } = await admin
+      .from("platform_staff")
+      .select("user_id, name, role")
+      .eq("user_id", user.id)
+      .maybeSingle<Staff>();
+    if (existing) return { supabase, user, staff: existing };
+
+    const { count } = await admin.from("platform_staff").select("user_id", { count: "exact", head: true });
+    if ((count ?? 0) === 0) {
+      const { data: created } = await admin
+        .from("platform_staff")
+        .insert({ user_id: user.id, name: defaultName, role: "owner" })
+        .select("user_id, name, role")
+        .maybeSingle<Staff>();
+      if (created) return { supabase, user, staff: created };
+    }
+  }
+
   // In development, automatically grant the logged-in developer owner access:
   if (process.env.NODE_ENV !== "production") {
     const devStaff: Staff = {
       user_id: user.id,
-      name: user.user_metadata?.full_name || user.user_metadata?.name || user.email?.split("@")[0] || "Katrina",
+      name: defaultName,
       role: "owner",
     };
     return { supabase, user, staff: devStaff };
   }
 
-  notFound();
+  redirect(`/admin-setup?userId=${encodeURIComponent(user.id)}&email=${encodeURIComponent(user.email ?? "")}`);
 }
 
 export async function requireStaffManager() {
