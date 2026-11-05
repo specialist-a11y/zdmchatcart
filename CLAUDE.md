@@ -7,11 +7,11 @@ Improve the client CRM using `docs/improvements/`. Read `docs/improvements/READM
 
 ## Stack
 - Next.js 15 App Router, server components and server actions, TypeScript.
-- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0015_priority_features.sql`, so add the next as `0016_...sql` and never edit an applied one except seed text.
+- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0016_shop_front.sql`, so add the next as `0017_...sql` and never edit an applied one except seed text.
 - RLS pattern: read policies use `private.is_member(business_id) or private.is_staff()`; writes go through server actions using `createAdminClient()` after an owner/admin role check (`requireMembership(slug)` returns `role`).
 - WhatsApp Cloud API (`lib/whatsapp.ts`), 24-hour window: free text only within 24 hours of the customer's last message, otherwise approved templates.
 - Instagram Graph via the client's Page token (`lib/instagram.ts`, `lib/social.ts`).
-- Nightly job: `app/api/cron/nightly` runs `lib/nightly.ts` (abandoned carts, Quiet stage, cart reminders, owner alerts on WhatsApp via `notifyClient`). Approved WhatsApp templates live in `message_templates`; use `sendTemplate(admin, businessId, to, purpose, ctx)` outside the 24-hour window.
+- Crons (Vercel Hobby, 2 max): `/api/cron/billing` also runs the nightly job (`lib/nightly.ts`), `/api/cron/posts` also sends the owner summary (`lib/summary.ts`). The nightly job handles abandoned carts, the Quiet stage, cart reminders and owner alerts on WhatsApp (via `notifyClient`). Approved WhatsApp templates live in `message_templates`; use `sendTemplate(admin, businessId, to, purpose, ctx)` outside the 24-hour window.
 - Server actions that write: `requireEditor(slug)` in `lib/crm-actions.ts` (owner/admin/staff check plus a writable client).
 - Payments: Fygaro links and webhook (`app/api/webhooks/fygaro`), `mark_order_paid` RPC is idempotent.
 

@@ -1,6 +1,6 @@
 # Build order
 
-Done so far: foundations 0.1 to 0.3, every quick win, and all of section 2 (migration `0015_priority_features.sql`, crons `/api/cron/nightly` and `/api/cron/summary`). Foundations and quick wins are in `supabase/migrations/0014_journeys_quickwins.sql`, `lib/journeys.ts`, `lib/nightly.ts` (cron `/api/cron/nightly`), `lib/health.ts`, `lib/support-sla.ts`. Items ticked in section 2 and 3 were built earlier (variants, image posts, help guides) or come with the nightly job.
+Done so far: foundations, quick wins, section 2 and the shop front (migrations 0014 to 0016). The nightly job runs inside the billing cron and the owner summary inside the posts cron (Vercel Hobby allows 2 crons).
 
 Work top to bottom. Each line links to its section file, which has the why, the wireframe and the files to start from.
 
@@ -10,7 +10,7 @@ Work top to bottom. Each line links to its section file, which has the why, the 
 2. ✅ **Message templates** (WhatsApp, Meta approval status per business): needed for reminders, win-back and broadcasts outside the 24-hour window.
 3. ✅ **STOP handling** in `app/api/webhooks/whatsapp/route.ts`: STOP, UNSUBSCRIBE and similar switch off `marketing_opt_in`/`whatsapp_opt_in` and reply once to confirm.
 
-## 1. Quick wins: Must, small effort (17)
+## 1. Quick wins: Must, small effort (18)
 
 - [x] **01 Today**: Action buttons on every Needs you item ([section](sections/01-today.md))
 - [x] **02 Inbox**: Saved quick replies ([section](sections/02-inbox.md))
@@ -23,14 +23,15 @@ Work top to bottom. Each line links to its section file, which has the why, the 
 - [x] **08 IG auto-replies**: Alerts when Instagram disconnects ([section](sections/08-autoreplies.md))
 - [x] **09 Ads**: Low wallet alert on WhatsApp ([section](sections/09-ads.md))
 - [x] **10 Content (videos)**: Full-screen preview and download ([section](sections/10-videos.md))
-- [x] **11 Website**: QR code for any link ([section](sections/11-website.md))
+- [x] **11 Website**: Shop score with one-minute to-dos ([section](sections/11-website.md))
+- [x] **11 Website**: “Make a link for today’s post” with QR card ([section](sections/11-website.md))
 - [x] **12 Settings**: Expiry warnings ([section](sections/12-settings.md))
 - [x] **13 Business info**: Logo upload ([section](sections/13-business.md))
 - [x] **14 Plan and billing**: Usage meters for everything in the plan ([section](sections/14-billing.md))
 - [x] **15 Help and support**: Attach screenshots or a short video ([section](sections/15-support.md))
 - [x] **15 Help and support**: Expected reply time and live status ([section](sections/15-support.md))
 
-## 2. Bigger must-haves (19)
+## 2. Bigger must-haves (20)
 
 - [x] **01 Today**: 8pm WhatsApp summary to the owner (Medium) ([section](sections/01-today.md))
 - [x] **02 Inbox**: Instagram DMs in the same inbox (Large) ([section](sections/02-inbox.md))
@@ -47,12 +48,26 @@ Work top to bottom. Each line links to its section file, which has the why, the 
 - [x] **09 Ads**: Real ad preview before approving (Medium) ([section](sections/09-ads.md))
 - [x] **10 Content (videos)**: Comments and change requests per clip (Medium) ([section](sections/10-videos.md))
 - [x] **10 Content (videos)**: Image posts beside videos (Medium) ([section](sections/10-videos.md))
+- [x] **11 Website**: Results strip and funnel (Medium) ([section](sections/11-website.md))
 - [x] **12 Settings**: Health checklist instead of raw keys (Medium) ([section](sections/12-settings.md))
 - [x] **12 Settings**: Team members and roles (Medium) ([section](sections/12-settings.md))
 - [x] **13 Business info**: Hours by day, used by the bot (Medium) ([section](sections/13-business.md))
 - [x] **14 Plan and billing**: Pay invoices online and download PDFs (Medium) ([section](sections/14-billing.md))
 
-## 3. Should-haves (38)
+## Shop front (customer-facing): do alongside Website
+
+- [x] **11b Shop front**: Cover photo, logo and “open now” status (Must, Small) ([section](sections/11b-shop-front.md))
+- [x] **11b Shop front**: Category chips and a 2-column grid (Must, Small) ([section](sections/11b-shop-front.md))
+- [x] **11b Shop front**: Product sheet: photos, sizes, ready days, “pairs well with” (Must, Medium) ([section](sections/11b-shop-front.md))
+- [x] **11b Shop front**: Pickup or delivery, with day and time slot and the fee (Must, Medium) ([section](sections/11b-shop-front.md))
+- [x] **11b Shop front**: “How ordering works” trust row (Must, Small) ([section](sections/11b-shop-front.md))
+- [x] **11b Shop front**: Product badges: Bestseller, Sold out, Pre-order day (Should, Small)
+- [x] **11b Shop front**: Specials strip and announcement bar (Should, Small)
+- [x] **11b Shop front**: WhatsApp-green order button, sticky, cart remembered (Should, Small)
+- [x] **11b Shop front**: Four themes from the brand colour (Should, Medium)
+- [x] **11b Shop front**: Real photos, fast loading and a share preview (Should, Medium)
+
+## 3. Should-haves (37)
 
 - [ ] **01 Today**: Date range and compare switch
 - [ ] **01 Today**: Quiet and abandoned counts
@@ -65,27 +80,26 @@ Work top to bottom. Each line links to its section file, which has the why, the 
 - [ ] **04 Orders**: Pickup and delivery schedule by day
 - [ ] **04 Orders**: Manual orders and search
 - [ ] **04 Orders**: Cancel and refund with a reason
-- [ ] **05 Customers**: Segments: VIP, birthdays, tags
+- [x] **05 Customers**: Segments: VIP, birthdays, tags
 - [ ] **05 Customers**: Search, export and message this group
 - [ ] **06 Products**: Sold-out toggle and low-stock alert
 - [ ] **06 Products**: Availability days and pre-order lead time
 - [ ] **07 Marketing**: Results per post, not just per link
-- [ ] **07 Marketing**: Request a post
+- [x] **07 Marketing**: Request a post
 - [ ] **08 IG auto-replies**: Test a comment and preview
 - [ ] **08 IG auto-replies**: Story reply keywords
-- [ ] **09 Ads**: Plain-language audience summary
+- [x] **09 Ads**: Plain-language audience summary
 - [ ] **09 Ads**: Spend pacing chart
 - [ ] **09 Ads**: Pause a campaign
 - [ ] **10 Content (videos)**: Pick the posting day
 - [ ] **10 Content (videos)**: Next shoot: date and shot list
-- [ ] **11 Website**: Section editor with phone preview
-- [ ] **11 Website**: Share preview: title, description, image
-- [ ] **11 Website**: Announcement bar
+- [x] **11 Website**: Live preview with “people looking now”
+- [x] **11 Website**: Specials strip, announcement bar and theme switch
 - [ ] **12 Settings**: Test buttons
-- [ ] **12 Settings**: Notification preferences
-- [ ] **13 Business info**: Delivery zones and fees
+- [x] **12 Settings**: Notification preferences
+- [x] **13 Business info**: Delivery zones and fees
 - [ ] **13 Business info**: VAT number and rate per business
-- [ ] **13 Business info**: Holiday closures
+- [x] **13 Business info**: Holiday closures
 - [ ] **14 Plan and billing**: Prorated preview before a plan change
 - [ ] **14 Plan and billing**: Compare plans side by side
 - [ ] **14 Plan and billing**: Setup fee shown on the first invoice

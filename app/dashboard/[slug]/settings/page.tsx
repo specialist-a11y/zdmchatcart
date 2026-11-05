@@ -202,7 +202,7 @@ export default async function SettingsPage({ params, searchParams }: {
         <h2 style={{ fontSize: 22 }}>WhatsApp messages to you</h2>
         <label className="row" style={{ flexDirection: "row", gap: 8, fontWeight: 600 }}>
           <input type="checkbox" name="daily_summary" defaultChecked={notify?.daily_summary ?? true} disabled={!isAdmin} style={{ width: 20, height: 20 }} />
-          8pm summary: today's sales, unpaid orders and chats waiting
+          Daily summary each morning: yesterday's sales, unpaid orders and chats waiting
         </label>
         <span className="muted" style={{ fontSize: 13 }}>Sent from the ZDMINC WhatsApp number to the owner phone in Business info. Alerts about your ad wallet and connections always go out.</span>
         {isAdmin && <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>Save</button>}

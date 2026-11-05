@@ -7,6 +7,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/zdm-billing";
 import LogoField from "./LogoField";
 import HoursEditor from "./HoursEditor";
+import ZonesEditor from "./ZonesEditor";
+import { readZones } from "@/lib/shop-front";
 import { cleanHours, hasHours, hoursSummary } from "@/lib/hours";
 
 const str = (f: FormData, k: string, max = 300) => String(f.get(k) ?? "").trim().slice(0, max);
@@ -65,6 +67,15 @@ async function saveBusinessInfo(f: FormData) {
     closed_note: str(f, "closed_note", 200) || null,
     ...(hasHours(hours) && (!str(f, "opening_hours") || str(f, "opening_hours", 400) === hoursSummary(cleanHours(prev?.hours))) ? { opening_hours: hoursSummary(hours) } : {}),
   }).eq("id", business.id);
+  // Delivery areas, pickup and slot length (migration 0016).
+  let zones: ReturnType<typeof readZones> = [];
+  try { zones = readZones(JSON.parse(String(f.get("delivery_zones") ?? "[]"))); } catch { /* keep empty */ }
+  const slot = Math.round(Number(str(f, "slot_minutes")) || 120);
+  const { error: zErr } = await admin.from("businesses").update({
+    delivery_zones: zones, pickup_enabled: f.get("pickup_enabled") === "on" || !zones.length,
+    slot_minutes: Math.min(480, Math.max(30, slot)),
+  }).eq("id", business.id);
+  if (zErr && f.get("delivery_zones")) back("Saved, but delivery areas need a database update: run supabase/migrations/0016_shop_front.sql.");
   if (hErr && f.get("hours")) back("Saved, but opening hours by day need a database update: run supabase/migrations/0015_priority_features.sql.");
   await logEvent(admin, business.id, { id: user.id, name: viewingAsStaff ? `${who(user)} (ZDMINC)` : who(user) }, "contact", "Business info updated");
   back("Saved. Your shop page shows the changes now.");
@@ -76,6 +87,7 @@ export default async function BusinessInfoPage({ params, searchParams }: { param
   const { supabase, business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
   const { data: hb } = await supabase.from("businesses").select("hours, closed_until, closed_note").eq("id", business.id).maybeSingle();
+  const { data: del } = await supabase.from("businesses").select("delivery_zones, pickup_enabled, slot_minutes").eq("id", business.id).maybeSingle();
   const { data: priv } = canEdit
     ? await createAdminClient().from("businesses").select("contact_name, contact_phone, contact_email").eq("id", business.id).single()
     : { data: null };
@@ -130,6 +142,18 @@ export default async function BusinessInfoPage({ params, searchParams }: { param
             <label>Note for customers<input name="closed_note" maxLength={200} defaultValue={hb?.closed_note ?? ""} placeholder="Closed for Christmas" /></label>
           </div>
           <span className="muted" style={{ fontSize: 13 }}>While you're closed for a holiday, your website shows the note and the reopening date. Clear the date when you're back.</span>
+        </section>
+
+        <section className="card stack" id="delivery">
+          <h2>Pickup and delivery at checkout</h2>
+          <label className="row" style={{ flexDirection: "row", gap: 8, fontWeight: 600 }}><input type="checkbox" name="pickup_enabled" defaultChecked={del?.pickup_enabled ?? true} style={{ width: 20, height: 20 }} />Customers can pick up</label>
+          <ZonesEditor initial={readZones(del?.delivery_zones)} currency={business.currency} disabled={!canEdit} />
+          <label style={{ maxWidth: 320 }}>Time slots customers pick from
+            <select name="slot_minutes" defaultValue={String(del?.slot_minutes ?? 120)}>
+              <option value="30">Every 30 minutes</option><option value="60">Every hour</option><option value="120">Every 2 hours</option><option value="180">Every 3 hours</option><option value="240">Every 4 hours</option>
+            </select>
+          </label>
+          <span className="muted" style={{ fontSize: 13 }}>Slots come from your opening hours above, with at least an hour&apos;s notice. Products with ready days or a lead time only offer slots that fit.</span>
         </section>
 
         <section className="card stack">

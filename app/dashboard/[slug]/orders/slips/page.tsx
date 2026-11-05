@@ -23,7 +23,7 @@ export default async function SlipsPage({ params, searchParams }: { params: Prom
   const sp = await searchParams;
   const { supabase, business } = await requireMembership(slug);
   const wanted = (Array.isArray(sp.code) ? sp.code : sp.code ? [sp.code] : []).filter((c) => /^[A-Z]{1,4}-\d{3,}$/.test(c)).slice(0, 100);
-  let q = supabase.from("orders").select("code, status, total, currency, fulfillment, note, created_at, paid_at, customers(name, phone), order_items(name, quantity, unit_price)")
+  let q = supabase.from("orders").select("*, customers(name, phone), order_items(name, quantity, unit_price)")
     .eq("business_id", business.id).order("created_at");
   q = wanted.length ? q.in("code", wanted) : q.in("status", ["paid", "ready"]);
   const { data: orders } = await q.limit(100);
@@ -39,7 +39,8 @@ export default async function SlipsPage({ params, searchParams }: { params: Prom
           <article key={o.code} className="slip">
             <div className="row" style={{ justifyContent: "space-between" }}><h2>{o.code}</h2><b>{business.name}</b></div>
             <span className="big">{o.customers?.name ?? "Customer"}{o.customers?.phone ? ` · +${o.customers.phone}` : ""}</span>
-            <span><b>{o.fulfillment === "delivery" ? "DELIVERY" : o.fulfillment === "pickup" ? "PICKUP" : "Pickup or delivery not set"}</b> · {o.paid_at ? "PAID" : "NOT PAID"}</span>
+            <span><b>{o.fulfillment === "delivery" ? "DELIVERY" : o.fulfillment === "pickup" ? "PICKUP" : "Pickup or delivery not set"}</b>{o.slot_at ? ` · ${new Date(o.slot_at).toLocaleString("en-GB", { timeZone: "America/Barbados", weekday: "short", day: "numeric", hour: "numeric", minute: "2-digit", hour12: true })}` : ""} · {o.paid_at ? "PAID" : "NOT PAID"}</span>
+            {o.delivery_address && <span>To: <b>{o.delivery_address}</b>{o.delivery_zone ? ` (${o.delivery_zone})` : ""}</span>}
             <table><tbody>
               {(o.order_items ?? []).map((i: any, k: number) => <tr key={k}><td style={{ width: 40 }}><b>{i.quantity} x</b></td><td>{i.name}</td><td style={{ textAlign: "right" }}>☐</td></tr>)}
             </tbody></table>

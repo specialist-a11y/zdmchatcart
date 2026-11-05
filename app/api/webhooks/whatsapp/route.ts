@@ -69,7 +69,7 @@ export async function POST(req: Request) {
 
     if (code) {
       // products(kind) tells bookings from orders; fall back without it if the join isn't available.
-      const find = (items: string) => admin.from("orders").select(`id, code, status, total, currency, customer_id, order_items(${items})`)
+      const find = (items: string) => admin.from("orders").select(`id, code, status, total, currency, customer_id, fulfillment, order_items(${items})`)
         .eq("business_id", businessId).eq("code", code).maybeSingle<any>();
       let { data: order, error: findErr } = await find("name, unit_price, quantity, products(kind)");
       if (findErr) order = (await find("name, unit_price, quantity")).data;
@@ -89,9 +89,15 @@ export async function POST(req: Request) {
           const url = needsPrice(items) ? null : await ensurePaymentLink(admin, order.id);
           reply = orderReply({
             code: order.code, items, total: order.total, currency: order.currency, paymentUrl: url,
-            hasProducts: items.some((i: any) => i.products?.kind !== "service"),
+            // Already chose pickup or delivery at checkout, so don't ask again.
+            hasProducts: !order.fulfillment && items.some((i: any) => i.products?.kind !== "service"),
             anyServices: items.some((i: any) => i.products?.kind === "service"),
           });
+          const { data: when } = await admin.from("orders").select("slot_at, delivery_address").eq("id", order.id).maybeSingle();
+          if (order.fulfillment || when?.slot_at) {
+            const t = when?.slot_at ? new Date(when.slot_at).toLocaleString("en-GB", { timeZone: "America/Barbados", weekday: "long", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).replace(":00", "") : null;
+            reply += `\n\n${order.fulfillment === "delivery" ? "Delivery" : order.fulfillment === "pickup" ? "Pickup" : "Time"}${t ? `: ${t}` : ""}${order.fulfillment === "delivery" && when?.delivery_address ? ` to ${when.delivery_address}` : ""}.`;
+          }
         }
       }
     }

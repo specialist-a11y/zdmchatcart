@@ -26,7 +26,14 @@ export type ProductInput = {
   active: boolean;
   hasOptions: boolean;
   variants: { id?: string; name: string; price: string; available: boolean }[];
+  // Shop front extras (migration 0016)
+  images?: string[];
+  ready_days?: string[];
+  lead_days?: string;
+  pairs_with?: string;
+  badge?: string;
 };
+const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
 /** A one-time signed URL so the browser uploads the product photo straight to storage. */
 export async function getProductPhotoUrl(slug: string, fileName: string) {
@@ -65,15 +72,32 @@ export async function saveProduct(slug: string, input: ProductInput) {
     price_note: input.price_note.trim().slice(0, 30) || null,
     price: Math.round(basePrice * 100) / 100, stock, image_url: image || null, active: input.active, variants: vs,
   };
+  const extras = {
+    images: (input.images ?? []).map((u) => u.trim()).filter((u) => /^https:\/\//.test(u) && u !== image).slice(0, 8),
+    ready_days: (input.ready_days ?? []).filter((d) => DAYS.includes(d)),
+    lead_days: Math.min(60, Math.max(0, Math.round(Number(input.lead_days) || 0))),
+    pairs_with: input.pairs_with && /^[0-9a-f-]{36}$/i.test(input.pairs_with) && input.pairs_with !== input.id ? input.pairs_with : null,
+    badge: ["bestseller", "new", "preorder", "none"].includes(input.badge ?? "") ? input.badge : null,
+  };
   const client = db(supabase);
+  // Save the extras separately so items still save before migration 0016 has run.
+  const saveExtras = async (id: string) => {
+    const { error } = await client.from("products").update(extras).eq("id", id).eq("business_id", business.id);
+    return error && (extras.images.length || extras.ready_days.length || extras.lead_days || extras.pairs_with || extras.badge)
+      ? "Saved, but extra photos, ready days and pairings need migration 0016_shop_front.sql." : null;
+  };
   if (input.id) {
     const { error } = await client.from("products").update(row).eq("id", input.id).eq("business_id", business.id);
     if (error) return { error: needsMigration(error.message) };
+    const warn = await saveExtras(input.id);
+    if (warn) return { error: warn };
   } else {
     // New items go to the end of the list.
     const { data: last } = await client.from("products").select("sort_order").eq("business_id", business.id).order("sort_order", { ascending: false }).limit(1).maybeSingle();
-    const { error } = await client.from("products").insert({ ...row, business_id: business.id, sort_order: (last?.sort_order ?? 0) + 1 });
+    const { data: made, error } = await client.from("products").insert({ ...row, business_id: business.id, sort_order: (last?.sort_order ?? 0) + 1 }).select("id").single();
     if (error) return { error: needsMigration(error.message) };
+    const warn = made ? await saveExtras(made.id) : null;
+    if (warn) return { error: warn };
   }
   revalidatePath(page(slug));
   revalidatePath(`/s/${slug}`);

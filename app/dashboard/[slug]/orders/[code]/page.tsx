@@ -170,6 +170,11 @@ export default async function OrderPage({ params, searchParams }: {
           {" · "}Source: {order.source}{order.attribution ? ` · From: ${order.attribution}` : ""}
           {order.paid_at ? ` · Paid ${new Date(order.paid_at).toLocaleString("en-BB")}` : ""}
         </p>
+        {(order.fulfillment || order.slot_at) && (
+          <p style={{ margin: 0 }}><b>{order.fulfillment === "delivery" ? "Delivery" : order.fulfillment === "pickup" ? "Pickup" : "Time"}</b>
+            {order.slot_at ? ` · ${new Date(order.slot_at).toLocaleString("en-GB", { timeZone: "America/Barbados", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true })}` : ""}
+            {order.delivery_zone ? ` · ${order.delivery_zone}` : ""}{order.delivery_address ? ` · ${order.delivery_address}` : ""}</p>
+        )}
       </div>
 
       {toPrice && (

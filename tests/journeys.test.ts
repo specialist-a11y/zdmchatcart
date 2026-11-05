@@ -53,3 +53,12 @@ test("daily summary", async () => {
   assert.doesNotMatch(t, /Chats waiting/);
   assert.match(dailySummary({ shop: "A", currency: "BBD", sales: 0, paidOrders: 0, newOrders: 0, unpaid: 0, unpaidTotal: 0, ready: 0, waiting: 0, link: "x" }), /quiet day/);
 });
+
+test("summary window: morning run reports yesterday", async () => {
+  const { summaryWindow } = await import("../lib/summary-window.ts");
+  const w = summaryWindow(Date.parse("2026-11-05T12:00:00Z")); // 8am Barbados
+  assert.equal(w.label, "Yesterday");
+  assert.equal(w.date, "2026-11-04");
+  assert.equal(w.start, "2026-11-04T04:00:00.000Z");
+  assert.equal(summaryWindow(Date.parse("2026-11-06T00:00:00Z")).label, "Today"); // 8pm Barbados
+});

@@ -11,10 +11,11 @@ import { dnsRecord, normaliseDomain, shortUrl, slugifyCode, validCode, validRef 
 import { addDomainToHost, checkDomain, removeDomainFromHost } from "@/lib/domains";
 import { money } from "@/lib/order-text";
 import TemplatePicker from "./TemplatePicker";
+import WebsiteResults from "./WebsiteResults";
 
-export default async function WebsitePage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
+export default async function WebsitePage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string; made?: string }> }) {
   const { slug } = await params;
-  const { msg } = await searchParams;
+  const { msg, made } = await searchParams;
   const { supabase, business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
   const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
@@ -111,9 +112,10 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
 
   return (
     <div className="stack">
-      <PageHeader n={num("website")} title="Website" sub="Your shop page, your own domain, and short links that track sales."
+      <PageHeader n={num("website")} title="Website" sub="Is your shop working for you, one thing to do today, and links that count every sale."
         actions={<Link className="btn small" href={live ? shopUrl : `/s/${slug}`} target="_blank">Open my shop</Link>} />
       {msg && <p className="ok" style={{ wordBreak: "break-word" }}>{msg}</p>}
+      <WebsiteResults supabase={supabase as any} business={business} slug={slug} canEdit={canEdit} shopUrl={shopUrl} domain={live?.domain ?? null} made={made} />
 
       <div className="cols">
         <section className="card stack" style={{ gap: 8 }}>

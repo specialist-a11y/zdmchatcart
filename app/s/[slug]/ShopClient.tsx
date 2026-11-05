@@ -1,12 +1,22 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 import { money } from "@/lib/order-text";
 import { cartKey, displayPrice, readVariants, splitKey, template, type Variant } from "@/lib/catalog";
+import { cleanHours } from "@/lib/hours";
+import { badgeFor, fulfilmentChip, readyText, readZones, sharedReadyDays, slotOptions, sourceOf, specialActive, theme as shopTheme, themeVars } from "@/lib/shop-front";
 import { SHOP_CSS } from "./shop-css";
+import { FRONT_CSS } from "./front-css";
+
+const WA_ICON = (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.5l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7a2.8 2.8 0 0 0 1.8-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z" /></svg>
+);
+const BADGE_TEXT: Record<string, string> = { bestseller: "Bestseller", new: "New", preorder: "Pre-order", soldout: "Sold out" };
 
 type Product = {
   id: string; name: string; description: string | null; price: number; image_url: string | null; stock: number | null;
   kind?: "product" | "service"; category?: string | null; price_note?: string | null; variants?: unknown; featured?: boolean;
+  images?: string[] | null; ready_days?: string[] | null; lead_days?: number | null; pairs_with?: string | null; badge?: string | null;
 };
 type Business = {
   name: string; slug: string; tagline: string | null; logo_url: string | null; brand_color: string; currency: string; whatsapp_number: string | null;
@@ -14,6 +24,8 @@ type Business = {
   public_email?: string | null; instagram?: string | null; facebook?: string | null; website_url?: string | null;
   meta_pixel_id?: string | null; site_template?: string | null; hero_image_url?: string | null;
   hero_headline?: string | null; hero_subheadline?: string | null; hero_text?: string | null;
+  shop_theme?: string | null; special_text?: string | null; special_ends_at?: string | null; announcement?: string | null;
+  delivery_zones?: unknown; pickup_enabled?: boolean | null; slot_minutes?: number | null; hours?: unknown;
 };
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: unknown } }
@@ -33,8 +45,10 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution, previewTemplate, openNow }: {
+export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme }: {
   openNow?: { open: boolean; label: string; reason: string } | null;
+  best?: string[];
+  previewTheme?: string | null;
   business: Business;
   products: Product[];
   attribution: string | null;
@@ -52,6 +66,18 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [marketing, setMarketing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // Pickup or delivery, zone, time slot and address (migration 0016).
+  const zones = useMemo(() => readZones(business.delivery_zones), [business.delivery_zones]);
+  const pickupOn = business.pickup_enabled !== false;
+  const [mode, setMode] = useState<"pickup" | "delivery" | null>(null);
+  const [zoneId, setZoneId] = useState<string>("");
+  const [slot, setSlot] = useState<string>("");
+  const [address, setAddress] = useState("");
+  const [shown, setShown] = useState(0); // bumps when checkout opens, so time slots are worked out in the browser
+  const [photo, setPhoto] = useState(0);
+  const [activeCat, setActiveCat] = useState<string>("");
+  const th = shopTheme(previewTheme ?? business.shop_theme);
+  const preview = !!(previewTemplate || previewTheme);
   // Ads tracking: only with a Pixel set up, and only after the visitor says yes.
   const pixel = business.meta_pixel_id && /^\d{8,20}$/.test(business.meta_pixel_id) ? business.meta_pixel_id : null;
   const [consent, setConsent] = useState<"unknown" | "yes" | "no">("unknown");
@@ -90,6 +116,20 @@ export default function ShopClient({ business, products, attribution, previewTem
     } catch {}
   }, [attribution, storageKey]);
 
+  // Visits and cart starts for the owner's Website results (once per browser session each).
+  const trackShop = (kind: "visit" | "cart") => {
+    if (preview) return;
+    try {
+      const k = `chatcart:t:${business.slug}:${kind}`;
+      if (sessionStorage.getItem(k)) return;
+      sessionStorage.setItem(k, "1");
+      const sp = new URLSearchParams(window.location.search);
+      const body = JSON.stringify({ slug: business.slug, kind, source: sourceOf(document.referrer, sp.get("utm_source"), attribution), ref: attribution ?? null });
+      if (!navigator.sendBeacon?.("/api/track", new Blob([body], { type: "application/json" }))) fetch("/api/track", { method: "POST", body, keepalive: true }).catch(() => {});
+    } catch {}
+  };
+  useEffect(() => { trackShop("visit"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     try {
       const saved = localStorage.getItem(storageKey);
@@ -117,6 +157,18 @@ export default function ShopClient({ business, products, attribution, previewTem
   const count = lines.reduce((s, l) => s + l.q, 0);
   const total = lines.reduce((s, l) => s + l.price * l.q, 0);
   const onRequest = lines.some((l) => l.price === 0);
+  const hasGoods = lines.some((l) => l.p.kind !== "service");
+  const zone = mode === "delivery" ? zones.find((z) => z.id === zoneId) ?? null : null;
+  const fee = zone?.fee ?? 0;
+  const grand = total + fee;
+  const hours = useMemo(() => cleanHours(business.hours), [business.hours]);
+  const slots = useMemo(() => (shown && Object.keys(hours).length ? slotOptions(hours, {
+    slotMinutes: business.slot_minutes ?? 120,
+    leadDays: Math.max(0, ...lines.map((l) => l.p.lead_days ?? 0)),
+    readyDays: sharedReadyDays(lines.map((l) => l.p)),
+  }) : []), [shown, hours, business.slot_minutes, lines.map((l) => l.key).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  const choices = [...(pickupOn ? ["pickup" as const] : []), ...(zones.length ? ["delivery" as const] : [])];
+  useEffect(() => { if (hasGoods && choices.length === 1 && mode !== choices[0]) setMode(choices[0]); }, [hasGoods, choices.length, choices[0], mode]); // eslint-disable-line react-hooks/exhaustive-deps
   const inCart = (productId: string) => lines.filter((l) => l.p.id === productId).reduce((s, l) => s + l.q, 0);
 
   function change(key: string, delta: number) {
@@ -127,11 +179,15 @@ export default function ShopClient({ business, products, attribution, previewTem
       const max = l.p.stock == null ? 99 : Math.max(0, l.p.stock - others);
       return { ...c, [key]: Math.min(max, Math.max(0, (c[key] ?? 0) + delta)) };
     });
-    if (delta > 0) track("AddToCart", { content_ids: [l.p.id], content_type: "product", content_name: l.name, value: l.price });
+    if (delta > 0) { track("AddToCart", { content_ids: [l.p.id], content_type: "product", content_name: l.name, value: l.price }); trackShop("cart"); }
   }
   const pickFor = (p: { id: string; opts: Variant[] }) => picks[p.id] ?? p.opts.find((v) => v.available)?.id ?? null;
 
   async function checkout() {
+    if (hasGoods && choices.length > 1 && !mode) return setError("Choose pickup or delivery");
+    if (mode === "delivery" && zones.length && !zone) return setError("Choose your delivery area");
+    if (mode === "delivery" && !address.trim()) return setError("Add the delivery address");
+    if (slots.length && !slot) return setError(`Choose a ${mode === "delivery" ? "delivery" : hasGoods ? "pickup" : ""} time`.replace("  ", " "));
     setBusy(true);
     setError("");
     try {
@@ -147,12 +203,16 @@ export default function ShopClient({ business, products, attribution, previewTem
           marketing,
           attribution: ref ?? undefined,
           fbc: consent === "yes" ? fbc ?? undefined : undefined,
+          fulfillment: hasGoods && mode ? mode : undefined,
+          zoneId: zone?.id,
+          slot: slot || undefined,
+          address: mode === "delivery" && address.trim() ? address.trim() : undefined,
         }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Something went wrong");
       setCart({});
-      track("InitiateCheckout", { value: total, num_items: count, content_ids: lines.map((l) => l.p.id), content_type: "product" });
+      track("InitiateCheckout", { value: grand, num_items: count, content_ids: lines.map((l) => l.p.id), content_type: "product" });
       window.location.href = json.whatsappUrl;
     } catch (e: any) {
       setError(e.message);
@@ -226,20 +286,45 @@ export default function ShopClient({ business, products, attribution, previewTem
     );
   }
 
-  const Img = ({ p }: { p: Product }) => p.image_url
-    ? <img src={p.image_url} alt={p.name} loading="lazy" />
-    : <div className="s-noimg" aria-hidden="true">{p.name.slice(0, 1)}</div>;
+  const Img = ({ p, plain }: { p: Product; plain?: boolean }) => !p.image_url
+    ? <div className="s-noimg" aria-hidden="true">{p.name.slice(0, 1)}</div>
+    : plain ? <img src={p.image_url} alt={p.name} loading="lazy" decoding="async" />
+    : <Image src={p.image_url} alt={p.name} fill sizes="(max-width: 720px) 50vw, 280px" style={{ objectFit: "cover" }} />;
+  const best$ = useMemo(() => new Set(best), [best]);
+  const badge = (p: Product) => {
+    const item = byId.get(p.id);
+    const b = badgeFor({ ...p, allOut: !!item?.opts.length && !item.opts.some((v) => v.available) }, best$);
+    return b ? <span className={`s-badgechip ${b}`}>{BADGE_TEXT[b]}</span> : null;
+  };
+  const tap = (p: Product) => ({ role: "button" as const, tabIndex: 0, onClick: () => { setPhoto(0); setFocus(p); }, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter") { setPhoto(0); setFocus(p); } }, "aria-label": `${p.name}, details` });
+  const special = specialActive(business.special_text, business.special_ends_at) ? business.special_text!.trim() : null;
+  const chip = fulfilmentChip(zones, pickupOn, business.currency);
+  const named = groups.filter(([c]) => c);
+  const initials = business.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const Chips = () => (openNow || chip ? (
+    <div className="s-chips">
+      {openNow && <span className={`s-chip ${openNow.open ? "open" : openNow.reason === "holiday" ? "holiday" : "closed"}`} role="status"><i />{openNow.label}{!openNow.open && openNow.reason !== "holiday" ? ". Order now" : ""}</span>}
+      {chip && <span className="s-chip">{chip}</span>}
+    </div>
+  ) : null);
 
   return (
-    <div className={`shop t-${t.id}`} style={{ ["--accent" as any]: business.brand_color || "#0F7C7E", ...(t.font ? { ["--display" as any]: t.font.family } : {}) }}>
-      {t.font && <link rel="stylesheet" href={t.font.url} precedence="default" />}
-      <style dangerouslySetInnerHTML={{ __html: SHOP_CSS }} />
+    <div className={`shop t-${t.id}${th ? ` th-any th-${th.id}` : ""}`} style={{ ["--accent" as any]: business.brand_color || "#0F7C7E", ...(t.font ? { ["--display" as any]: t.font.family } : {}),
+      ...(th ? (() => { const v = themeVars(th.id, business.brand_color); return { ...v, "--fg": v["--ink"], "--card": v["--surface"] } as any; })() : {}) }}>
+      {t.font && !th && <link rel="stylesheet" href={t.font.url} precedence="default" />}
+      {th && <link rel="stylesheet" href={th.fontUrl} precedence="default" />}
+      <style dangerouslySetInnerHTML={{ __html: SHOP_CSS + FRONT_CSS }} />
+      {business.announcement?.trim() && <div className="s-announce" role="note">{business.announcement.trim()}</div>}
 
       {classicBar ? (
-        <header className="s-bar">
-          <div className="s-wrap s-brand">
-            {business.logo_url && <img src={business.logo_url} alt="" width={56} height={56} />}
-            <div><h1>{business.name}</h1>{business.tagline && <p>{business.tagline}</p>}</div>
+        <header className="s-front">
+          <div className="s-cover" data-img={business.hero_image_url ? "" : undefined}
+            style={business.hero_image_url ? { ["--hero" as any]: `url("${business.hero_image_url.replace(/"/g, "%22")}")` } : undefined} />
+          <div className="s-wrap s-fronttext">
+            <div className="s-roundlogo">{business.logo_url ? <img src={business.logo_url} alt="" /> : initials}</div>
+            <h1>{business.name}</h1>
+            {business.tagline && <p className="s-tag">{business.tagline}</p>}
+            <Chips />
           </div>
         </header>
       ) : (
@@ -265,25 +350,26 @@ export default function ShopClient({ business, products, attribution, previewTem
         </header>
       )}
 
-      {openNow && (
-        <div className="s-wrap" style={{ paddingTop: 12, paddingBottom: 0 }}>
-          <div role="status" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 999, fontWeight: 700, fontSize: 14,
-            background: openNow.open ? "#e6f7ee" : openNow.reason === "holiday" ? "#fff3e0" : "#f1f2f2", color: openNow.open ? "#146c43" : openNow.reason === "holiday" ? "#8a4b00" : "#4a5c5b" }}>
-            <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: "50%", background: openNow.open ? "#2bb673" : openNow.reason === "holiday" ? "#e0a23b" : "#9aa7a2" }} />
-            {openNow.label}{!openNow.open && openNow.reason !== "holiday" ? ". You can still order now." : ""}
-          </div>
-        </div>
-      )}
+      {!classicBar && (openNow || chip) && <div className="s-wrap"><Chips /></div>}
       <main id="items" className="s-wrap s-main">
+        {special && <div className="s-special" role="note"><b>Special:</b> {special}</div>}
         {products.length === 0 && <p className="s-empty">Nothing here yet. Check back soon.</p>}
+        {named.length > 1 && (
+          <nav className="s-catnav" aria-label="Categories">
+            <div>
+              <a href="#items" className={!activeCat ? "on" : ""} onClick={() => setActiveCat("")}>All</a>
+              {named.map(([c]) => <a key={c} href={`#cat-${encodeURIComponent(c)}`} className={activeCat === c ? "on" : ""} onClick={() => setActiveCat(c)}>{c}</a>)}
+            </div>
+          </nav>
+        )}
         {groups.map(([cat, items]) => (
-          <section key={cat || "_"} className="s-group">
+          <section key={cat || "_"} id={cat ? `cat-${encodeURIComponent(cat)}` : undefined} className="s-group">
             {cat && <h2 className="s-cat">{cat}</h2>}
             {t.layout === "menu" ? (
               <div className="s-menu">
                 {items.map((p) => (
-                  <article key={p.id} className="s-row">
-                    {p.image_url && <div className="s-thumb"><Img p={p} /></div>}
+                  <article key={p.id} className="s-row" {...tap(p)}>
+                    {p.image_url && <div className="s-thumb" style={{ position: "relative" }}><Img p={p} /></div>}
                     <div className="s-rowtext">
                       <div className="s-rowhead"><h3>{p.name}</h3><span className="s-dots" aria-hidden="true" /></div>
                       {p.description && <p>{p.description}</p>}
@@ -296,7 +382,7 @@ export default function ShopClient({ business, products, attribution, previewTem
               <div className="s-gallery">
                 {items.map((p) => (
                   <button key={p.id} type="button" className="s-piece" onClick={() => setFocus(p)} aria-label={`View ${p.name}`}>
-                    <Img p={p} />
+                    <Img p={p} plain />
                     <span className="s-caption"><b>{p.name}</b><span>{priceText(p)}</span></span>
                     {inCart(p.id) > 0 && <span className="s-badge">✓</span>}
                   </button>
@@ -305,8 +391,9 @@ export default function ShopClient({ business, products, attribution, previewTem
             ) : (
               <div className="s-grid">
                 {items.map((p) => (
-                  <article key={p.id} className="s-card">
-                    {(t.id === "classic" || p.image_url) && <div className="s-cardimg"><Img p={p} /></div>}
+                  <article key={p.id} className="s-card" {...tap(p)}>
+                    {badge(p)}
+                    {(t.id === "classic" || th || p.image_url) && <div className="s-cardimg" style={{ position: "relative" }}><Img p={p} /></div>}
                     <div className="s-cardbody">
                       <h3>{p.name}</h3>
                       {p.description && <p>{p.description}</p>}
@@ -337,7 +424,7 @@ export default function ShopClient({ business, products, attribution, previewTem
         )}
       </main>
 
-      {focus && (
+      {focus && t.layout === "gallery" && (
         <div className="s-modal" role="dialog" aria-modal="true" aria-label={focus.name} onClick={() => setFocus(null)}>
           <div className="s-modalbox" onClick={(e) => e.stopPropagation()}>
             <button className="s-close" onClick={() => setFocus(null)} aria-label="Close">✕</button>
@@ -351,53 +438,132 @@ export default function ShopClient({ business, products, attribution, previewTem
         </div>
       )}
 
-      {count > 0 && (
-        <div className="s-cart">
-          <div className="s-wrap">
-            {!open ? (
-              <div className="s-cartbar">
-                <span><strong>{count} {count > 1 ? "items" : "item"}</strong> · {money(total, business.currency)}{onRequest ? " + quote" : ""}</span>
-                <button className="s-btn" onClick={() => setOpen(true)}>{t.cta}</button>
+      {focus && t.layout !== "gallery" && (() => {
+        const photos = [focus.image_url, ...(focus.images ?? [])].filter((x): x is string => !!x);
+        const ready = readyText(focus);
+        const pair = focus.pairs_with ? byId.get(focus.pairs_with) : undefined;
+        return (
+          <div className="s-sheetwrap" role="dialog" aria-modal="true" aria-label={focus.name} onClick={() => setFocus(null)}>
+            <div className="s-sheet" onClick={(e) => e.stopPropagation()} style={{ position: "relative" }}>
+              <button className="s-close2" onClick={() => setFocus(null)} aria-label="Close">✕</button>
+              {photos.length > 0 && (
+                <>
+                  <div className="s-carousel" onScroll={(e) => { const el = e.currentTarget; setPhoto(Math.round(el.scrollLeft / el.clientWidth)); }}>
+                    {photos.map((src, i) => <img key={src + i} src={src} alt={i ? `${focus.name}, photo ${i + 1}` : focus.name} loading={i ? "lazy" : "eager"} />)}
+                  </div>
+                  {photos.length > 1 && <div className="s-dotsrow" aria-hidden="true">{photos.map((_, i) => <i key={i} className={i === photo ? "on" : ""} />)}</div>}
+                </>
+              )}
+              <div className="s-sheetbody">
+                <div className="s-sheethead"><h3>{focus.name}</h3>{badge(focus)}</div>
+                {focus.description && <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.5 }}>{focus.description}</p>}
+                {ready && <span className="s-ready"><b>{ready.split(" · ")[0]}</b>{ready.includes(" · ") ? ` · ${ready.split(" · ").slice(1).join(" · ")}` : ""}</span>}
+                {pair && (
+                  <div className="stack" style={{ gap: 6 }}>
+                    <span className="s-small">Pairs well with</span>
+                    <div className="s-pair">
+                      {pair.image_url ? <img src={pair.image_url} alt="" /> : <span className="s-pairimg" />}
+                      <span>{pair.name} · {priceText(pair)}</span>
+                      {!pair.opts.length && pair.stock !== 0 && <button type="button" aria-label={`Add ${pair.name}`} onClick={() => change(cartKey(pair.id, null), 1)}>+</button>}
+                      {pair.opts.length > 0 && <button type="button" aria-label={`See ${pair.name}`} onClick={() => setFocus(pair)}>›</button>}
+                    </div>
+                  </div>
+                )}
+                <Buy p={focus} big />
+                {inCart(focus.id) > 0 && <button className="s-btn" onClick={() => setFocus(null)}>Done · {money(total, business.currency)} in your order</button>}
               </div>
-            ) : (
-              <div className="s-checkout">
-                <div className="s-cartbar">
-                  <strong>Your {t.id === "beauty" ? "booking" : t.id === "trades" ? "quote request" : t.id === "artist" ? "enquiry" : "order"}</strong>
-                  <button className="s-btn ghost small" onClick={() => setOpen(false)}>Back</button>
-                </div>
-                <ul className="s-lines">
-                  {lines.map((l) => (
-                    <li key={l.key}>
-                      <span>{l.name}</span>
-                      <span className="s-qty small">
-                        <button aria-label={`Remove one ${l.name}`} onClick={() => change(l.key, -1)}>−</button>
-                        <span>{l.q}</span>
-                        <button aria-label={`Add one ${l.name}`} onClick={() => change(l.key, 1)}>+</button>
-                      </span>
-                      <b>{l.price ? money(l.price * l.q, business.currency) : "On request"}</b>
-                    </li>
-                  ))}
-                  <li className="s-total"><span>Total</span><span /><b>{money(total, business.currency)}{onRequest ? " + quote" : ""}</b></li>
-                </ul>
-                <div className="s-fields">
-                  <label>Name (optional)<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
-                  <label>WhatsApp number (optional)<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" /></label>
-                </div>
-                <label className="s-check">
-                  <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} />
-                  Save my cart and send me a WhatsApp reminder if I don&apos;t finish
-                </label>
-                <label className="s-check">
-                  <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
-                  Send me {business.name}&apos;s offers, and show me its ads
-                </label>
-                <button className="s-btn" disabled={busy || !business.whatsapp_number} onClick={checkout}>
-                  {busy ? "Opening WhatsApp..." : `Send on WhatsApp`}
-                </button>
-                {!business.whatsapp_number && <p style={{ margin: 0 }}>This business has not added its WhatsApp number yet.</p>}
-                {error && <p className="s-err">{error}</p>}
+            </div>
+          </div>
+        );
+      })()}
+
+      {count > 0 && !open && (
+        <div className="s-cart s-light">
+          <div className="s-wrap s-cartbar">
+            <span><small>Your {t.id === "beauty" ? "booking" : t.id === "trades" ? "quote request" : t.id === "artist" ? "enquiry" : "order"}</small><strong>{count} {count > 1 ? "items" : "item"} · {money(total, business.currency)}{onRequest ? " + quote" : ""}</strong></span>
+            <button className="s-btn s-wa" onClick={() => { setOpen(true); setShown((n) => n + 1); }}>{WA_ICON}{t.cta}</button>
+          </div>
+        </div>
+      )}
+
+      {count > 0 && open && (
+        <div className="s-sheetwrap" role="dialog" aria-modal="true" aria-label="Your order" onClick={() => setOpen(false)}>
+          <div className="s-sheet" onClick={(e) => e.stopPropagation()}>
+            <div className="s-sheetbody s-co">
+              <div className="s-sheethead">
+                <h3>Your {t.id === "beauty" ? "booking" : t.id === "trades" ? "quote" : t.id === "artist" ? "enquiry" : "order"}</h3>
+                <button className="s-btn ghost small" onClick={() => setOpen(false)}>Keep shopping</button>
               </div>
-            )}
+              <ul className="s-lines">
+                {lines.map((l) => (
+                  <li key={l.key}>
+                    <span>{l.name}</span>
+                    <span className="s-qty small">
+                      <button aria-label={`Remove one ${l.name}`} onClick={() => change(l.key, -1)}>−</button>
+                      <span>{l.q}</span>
+                      <button aria-label={`Add one ${l.name}`} onClick={() => change(l.key, 1)}>+</button>
+                    </span>
+                    <b>{l.price ? money(l.price * l.q, business.currency) : "On request"}</b>
+                  </li>
+                ))}
+                {fee > 0 && <li><span>Delivery · {zone!.name}</span><span /><b>{money(fee, business.currency)}</b></li>}
+              </ul>
+
+              {hasGoods && choices.length > 1 && (
+                <div className="s-toggle" role="group" aria-label="Pickup or delivery">
+                  <button type="button" aria-pressed={mode === "pickup"} onClick={() => { setMode("pickup"); setSlot(""); }}>Pickup</button>
+                  <button type="button" aria-pressed={mode === "delivery"} onClick={() => { setMode("delivery"); setSlot(""); }}>Delivery{zones.length ? ` +${Math.min(...zones.map((z) => z.fee))}` : ""}</button>
+                </div>
+              )}
+              {mode === "pickup" && business.address && (
+                <span style={{ fontSize: 14, color: "var(--muted)" }}>Pickup at {business.address.split("\n").join(", ")} · <a href={`https://maps.google.com/?q=${encodeURIComponent(business.address.replace(/\n/g, ", "))}`} target="_blank" rel="noreferrer">open map</a></span>
+              )}
+              {mode === "delivery" && (
+                <>
+                  {zones.length > 0 && (
+                    <label>Delivery area
+                      <select value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
+                        <option value="">Choose your area</option>
+                        {zones.map((z) => <option key={z.id} value={z.id}>{z.name} · {z.fee ? money(z.fee, business.currency) : "Free"}</option>)}
+                      </select>
+                    </label>
+                  )}
+                  <label>Delivery address<input value={address} onChange={(e) => setAddress(e.target.value)} autoComplete="street-address" placeholder="House, street, parish" /></label>
+                </>
+              )}
+              {slots.length > 0 && (mode || !hasGoods) && (
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="s-small">{mode === "delivery" ? "Delivery time" : hasGoods ? "Pickup time" : "Preferred time"}</span>
+                  <div className="s-slots" role="group" aria-label="Times">
+                    {slots.map((x) => <button key={x.iso} type="button" aria-pressed={slot === x.iso} onClick={() => setSlot(x.iso)}>{x.label}</button>)}
+                  </div>
+                </div>
+              )}
+
+              <div className="s-fields">
+                <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
+                <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="Optional" /></label>
+              </div>
+              <label className="s-check">
+                <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
+                Send me a WhatsApp reminder if I don&apos;t finish
+              </label>
+              <label className="s-check">
+                <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
+                Tell me about {business.name}&apos;s specials on WhatsApp
+              </label>
+              <div className="s-sheethead" style={{ fontSize: 18 }}><b>Total</b><b>{money(grand, business.currency)}{onRequest ? " + quote" : ""}</b></div>
+              <ol className="s-how" aria-label="How ordering works">
+                <li>Your order code is typed for you in WhatsApp. Just press send.</li>
+                <li>We reply with a secure card payment link{onRequest ? " once the price is confirmed" : ""}.</li>
+                <li>Your receipt arrives on WhatsApp.</li>
+              </ol>
+              <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={busy || !business.whatsapp_number} onClick={checkout}>
+                {WA_ICON}{busy ? "Opening WhatsApp..." : "Order on WhatsApp"}
+              </button>
+              {!business.whatsapp_number && <p style={{ margin: 0 }}>This business has not added its WhatsApp number yet.</p>}
+              {error && <p className="s-err" role="alert">{error}</p>}
+            </div>
           </div>
         </div>
       )}

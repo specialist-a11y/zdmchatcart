@@ -51,7 +51,7 @@ Not in this build yet: automatic cutting of raw footage into clips (upload the e
 3. **Supabase Auth**: Authentication, URL configuration: set Site URL to your live URL and add `<your-url>/auth/callback` to Redirect URLs.
 4. **Run locally**: `npm install`, then `npm run dev` and open http://localhost:3000.
 5. **Deploy**: push to GitHub, import into Vercel, add the same environment variables. `vercel.json` runs the billing job daily at 6am Barbados time; set `CRON_SECRET` in Vercel.
-6. **Admin**: run the files in `supabase/migrations/` from `0002_admin.sql` to `0015_priority_features.sql`, in order, in the Supabase SQL editor, then make yourself staff once:
+6. **Admin**: run the files in `supabase/migrations/` from `0002_admin.sql` to `0016_shop_front.sql`, in order, in the Supabase SQL editor, then make yourself staff once:
    `insert into public.platform_staff (user_id, name, role) values ('<your user id from Authentication, Users>', 'Kat', 'owner');`
    Open `/admin`. Add the rest of the team from Team.
 7. **ZDMINC's own Fygaro and WhatsApp** (for billing clients and the admin WhatsApp inbox): fill in the `ZDM_*` variables in `.env.example`. Use a separate WhatsApp number from any client. Point that number's webhook at the same `<your-url>/api/webhooks/whatsapp`; the app tells the two apart by phone number ID. Create one utility template with a single variable, for example "Hi {{1}}, the ZDMINC team has a message for you. Reply here to see it.", and put its name in `ZDM_WA_TEMPLATE`.

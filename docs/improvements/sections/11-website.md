@@ -1,9 +1,9 @@
 # 11 / Website
 
-**Purpose:** The shop page, the business’s own domain, and short links that track sales.  
+**Purpose:** Show owners their shop is working for them, and give them one easy thing to do each visit.  
 **Used by:** Owner, ZDMINC  
 **Status in the app today:** Working  
-**Success measure:** Visitors → orders · short link clicks
+**Success measure:** Owners open Website weekly · links shared per week · shop score above 90%
 
 ![Blueprint board](../images/Section-11-website.png)
 
@@ -24,28 +24,29 @@
 
 ## How it should work
 
-1. **Owner shares links**: Bio, Stories, flyers, QR codes
-2. **Visitor lands on the shop**: On islandcrumb.com
-3. **Cart → WhatsApp**: Order code typed for them
-4. **Sales counted per link**: Shown on this page and in Marketing
+1. **Owner opens Website**: Sees this week’s visits, carts and orders first
+2. **Picks a to-do**: Shop score tasks, a link for today’s post, a special
+3. **Shares in one tap**: Link, WhatsApp Status, QR card
+4. **Gets nudged and celebrated**: 8pm summary tips and milestone badges
 
 ## Next wireframe (what the screen should contain)
 
-- **bar** Website: actions Phone ▾, Edit sections (improvement #1)
-- **phone** Shop preview (improvement #1)
-- **list** Sections: ☰ Specials strip; ☰ Products; ☰ About; ☰ FAQs; + Add section (improvement #1)
-- **list** Short links: islandcrumb.com/cake · 212 clicks; [QR code] [Copy] (improvement #2)
+- **funnel** Visits, Carts, WhatsApp orders, Paid (improvement #1)
+- **score** ✓ Logo and colours, ✓ Own domain, ○ Photos on 3 products, ○ Opening hours, ○ Specials strip (improvement #3)
+- **list** Make a link for today’s post: islandcrumb.com/rumcake; [Copy] [WhatsApp Status] [QR card]; 🏆 /cake: 8 orders this month (improvement #4)
+- **phone** Your shop now · 3 people looking (improvement #2)
+- **strip** Specials strip: “This Saturday only: rum cake” · ends Sun 6pm   ·   Announcement: off   ·   Theme: Warm bakery ▾ (improvement #5)
 
 ## What's missing (build these)
 
 | # | Improvement | Why it matters | Priority | Effort |
 |---|---|---|---|---|
-| 1 | Section editor with phone preview | Specials and about text without asking ZDMINC. | Should | Large (more than 3 days) |
-| 2 | QR code for any link | Flyers, counter signs and packaging. | Must | Small (under a day) |
-| 3 | Share preview: title, description, image | How the link looks when pasted in WhatsApp. | Should | Small (under a day) |
-| 4 | Buy a domain in the app | Removes a setup step for owners. | Could | Medium (1 to 3 days) |
-| 5 | Announcement bar | “Closed Monday for the holiday”. | Should | Small (under a day) |
-| 6 | Visitor numbers | Visits, carts started and orders, by day. | Could | Medium (1 to 3 days) |
+| 1 | Results strip and funnel | Answers “is my shop working?” the moment they open it. | Must | Medium (1 to 3 days) |
+| 2 | Live preview with “people looking now” | Makes the shop feel alive and worth sharing. | Should | Medium (1 to 3 days) |
+| 3 | Shop score with one-minute to-dos | Gets owners to add the details that sell: photos, hours, about. | Must | Small (under a day) |
+| 4 | “Make a link for today’s post” with QR card | Turns sharing into one tap, and every share is tracked. | Must | Small (under a day) |
+| 5 | Specials strip, announcement bar and theme switch | Owners change what customers see without asking ZDMINC. | Should | Medium (1 to 3 days) |
+| 6 | Nudges and milestone badges | Brings owners back: “Best Saturday yet. Share your link again?” | Could | Medium (1 to 3 days) |
 
 ## Done means
 

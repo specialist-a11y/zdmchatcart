@@ -11,7 +11,9 @@ import { deleteProduct, getProductPhotoUrl, reorder, saveProduct, setActive, set
 export type Item = {
   id: string; kind: "product" | "service"; name: string; description: string | null; category: string | null;
   price: number; price_note: string | null; stock: number | null; image_url: string | null; active: boolean; variants: unknown; featured?: boolean;
+  images?: string[]; ready_days?: string[]; lead_days?: number; pairs_with?: string | null; badge?: string | null;
 };
+const WEEK = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]] as const;
 
 /** Category ideas per website template, shown as suggestions. */
 const CATEGORY_IDEAS: Record<string, string[]> = {
@@ -63,7 +65,7 @@ const CSS = `
 
 const blank = (kind: "product" | "service"): ProductInput => ({
   kind, name: "", description: "", category: "", price: "", price_note: kind === "service" ? "" : "", stock: "", image_url: "", active: true, hasOptions: false,
-  variants: [{ name: "", price: "", available: true }],
+  variants: [{ name: "", price: "", available: true }], images: [], ready_days: [], lead_days: "", pairs_with: "", badge: "",
 });
 
 function toInput(p: Item): ProductInput {
@@ -73,6 +75,7 @@ function toInput(p: Item): ProductInput {
     price: String(p.price ?? ""), price_note: p.price_note ?? "", stock: p.stock == null ? "" : String(p.stock),
     image_url: p.image_url ?? "", active: p.active, hasOptions: vs.length > 0,
     variants: vs.length ? vs.map((v) => ({ id: v.id, name: v.name, price: String(v.price), available: v.available })) : [{ name: "", price: "", available: true }],
+    images: p.images ?? [], ready_days: p.ready_days ?? [], lead_days: p.lead_days ? String(p.lead_days) : "", pairs_with: p.pairs_with ?? "", badge: p.badge ?? "",
   };
 }
 
@@ -92,6 +95,23 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
   const categories = [...new Set([...items.map((i) => i.category).filter(Boolean) as string[], ...(CATEGORY_IDEAS[template] ?? CATEGORY_IDEAS.classic)])];
   const shown = ordered.filter((i) => !filter || i.name.toLowerCase().includes(filter.toLowerCase()) || (i.category ?? "").toLowerCase().includes(filter.toLowerCase()));
   const set = (patch: Partial<ProductInput>) => setForm((f) => (f ? { ...f, ...patch } : f));
+
+  async function uploadExtra(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/") || !form) return;
+    setUploading(true);
+    setError("");
+    try {
+      const photo = await preparePhoto(file);
+      const signed = await getProductPhotoUrl(slug, photo.file.name);
+      if ("error" in signed) throw new Error(signed.error);
+      const { error } = await createClient().storage.from("product-images").uploadToSignedUrl(signed.path, signed.token, photo.file, { contentType: "image/jpeg" });
+      if (error) throw new Error(error.message);
+      setForm((f) => (f ? { ...f, images: [...(f.images ?? []), signed.publicUrl].slice(0, 8) } : f));
+    } catch (e: any) {
+      setError(e?.message ?? "Upload failed");
+    }
+    setUploading(false);
+  }
 
   async function uploadPhoto(file: File | undefined) {
     if (!file || !file.type.startsWith("image/")) return;
@@ -277,6 +297,54 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                 </label>
               )}
             </div>
+
+            <details className="stack" style={{ gap: 10 }} open={!!(form.images?.length || form.ready_days?.length || form.lead_days || form.pairs_with || form.badge)}>
+              <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>More for the shop page: photos, ready days, pairing</summary>
+              <div className="stack" style={{ gap: 10, marginTop: 6 }}>
+                <div className="stack" style={{ gap: 6 }}>
+                  <b style={{ fontSize: 14 }}>More photos <span className="muted" style={{ fontWeight: 400 }}>(customers swipe through them)</span></b>
+                  <div className="row" style={{ gap: 6 }}>
+                    {(form.images ?? []).map((u) => (
+                      <span key={u} style={{ position: "relative" }}>
+                        <img src={u} alt="" style={{ width: 64, height: 64, objectFit: "cover", borderRadius: 10 }} />
+                        <button type="button" aria-label="Remove photo" onClick={() => set({ images: (form.images ?? []).filter((x) => x !== u) })}
+                          style={{ position: "absolute", top: -6, right: -6, width: 24, height: 24, borderRadius: "50%", border: 0, background: "#0b0f0e", color: "#fff", cursor: "pointer" }}>✕</button>
+                      </span>
+                    ))}
+                    {(form.images?.length ?? 0) < 8 && (
+                      <label className="btn secondary small" style={{ cursor: "pointer" }}>{uploading ? "Uploading…" : "+ Add photo"}
+                        <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploading} onChange={(e) => { uploadExtra(e.target.files?.[0]); e.target.value = ""; }} />
+                      </label>
+                    )}
+                  </div>
+                </div>
+                <div className="stack" style={{ gap: 6 }}>
+                  <b style={{ fontSize: 14 }}>Ready on <span className="muted" style={{ fontWeight: 400 }}>(leave all off if it's any day)</span></b>
+                  <div className="row" style={{ gap: 4 }}>
+                    {WEEK.map(([d, l]) => {
+                      const on = (form.ready_days ?? []).includes(d);
+                      return <button key={d} type="button" className={`btn small ${on ? "" : "secondary"}`} aria-pressed={on} style={{ minWidth: 48 }}
+                        onClick={() => set({ ready_days: on ? (form.ready_days ?? []).filter((x) => x !== d) : [...(form.ready_days ?? []), d] })}>{l}</button>;
+                    })}
+                  </div>
+                </div>
+                <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+                  <label>Order ahead (days)<input type="number" min="0" max="60" inputMode="numeric" value={form.lead_days ?? ""} onChange={(e) => set({ lead_days: e.target.value })} placeholder="0" /></label>
+                  <label>Badge
+                    <select value={form.badge ?? ""} onChange={(e) => set({ badge: e.target.value })}>
+                      <option value="">Automatic</option><option value="new">New</option><option value="bestseller">Bestseller</option><option value="preorder">Pre-order</option><option value="none">No badge</option>
+                    </select>
+                  </label>
+                </div>
+                <label>Pairs well with
+                  <select value={form.pairs_with ?? ""} onChange={(e) => set({ pairs_with: e.target.value })}>
+                    <option value="">Nothing</option>
+                    {items.filter((i) => i.id !== form.id && i.active).map((i) => <option key={i.id} value={i.id}>{i.name}</option>)}
+                  </select>
+                </label>
+                <span className="muted" style={{ fontSize: 13 }}>Automatic badges: Bestseller from your paid orders in the last 30 days, Pre-order when it has ready days or an order-ahead time, Sold out at 0 stock.</span>
+              </div>
+            </details>
 
             <label className="pe-switch">
               <input type="checkbox" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />

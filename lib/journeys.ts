@@ -79,18 +79,18 @@ export function ago(iso: string | null | undefined, now = Date.now()) {
 /** The 8pm WhatsApp summary to the owner. */
 export function dailySummary(d: {
   shop: string; currency: string; sales: number; paidOrders: number; newOrders: number;
-  unpaid: number; unpaidTotal: number; ready: number; waiting: number; link: string;
+  unpaid: number; unpaidTotal: number; ready: number; waiting: number; link: string; day?: "Today" | "Yesterday";
 }) {
   const m = (n: number) => `${d.currency} ${n.toFixed(2)}`;
   const lines = [
-    `Today at ${d.shop}`,
+    `${d.day ?? "Today"} at ${d.shop}`,
     `Sales: ${m(d.sales)} from ${d.paidOrders} paid order${d.paidOrders === 1 ? "" : "s"}`,
     `New orders: ${d.newOrders}`,
   ];
   if (d.unpaid) lines.push(`Unpaid: ${d.unpaid} (${m(d.unpaidTotal)}). Each gets one reminder the day after.`);
   if (d.ready) lines.push(`Ready to collect: ${d.ready}`);
   if (d.waiting) lines.push(`Chats waiting for you: ${d.waiting}`);
-  if (!d.sales && !d.newOrders && !d.unpaid && !d.waiting) lines.push("A quiet day. Share your shop link to bring in orders.");
+  if (!d.sales && !d.newOrders && !d.unpaid && !d.waiting) lines.push(`A quiet day. Share your shop link to bring in orders.`);
   lines.push(`Open Today: ${d.link}`);
   return lines.join("\n");
 }
