@@ -1,6 +1,6 @@
 {
   "crons": [
     { "path": "/api/cron/billing", "schedule": "0 10 * * *" },
-    { "path": "/api/cron/posts", "schedule": "*/5 * * * *" }
+    { "path": "/api/cron/posts", "schedule": "0 12 * * *" }
   ]
 }
