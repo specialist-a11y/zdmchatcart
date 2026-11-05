@@ -4,7 +4,7 @@ import Link from "next/link";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import Uploader from "./Uploader";
-import { createShoot, deleteClip, publishShoot, updateClip } from "./video-actions";
+import { answerClipComment, createShoot, deleteClip, publishShoot, updateClip } from "./video-actions";
 
 export default async function VideosAdmin({ searchParams }: { searchParams: Promise<{ client?: string; shoot?: string; msg?: string }> }) {
   await requireStaff();
@@ -29,11 +29,33 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
   const signed = paths.length ? (await admin.storage.from("client-videos").createSignedUrls(paths, 3600)).data ?? [] : [];
   const urlFor = (p: string | null) => (p ? signed.find((s) => s.path === p)?.signedUrl ?? undefined : undefined);
   const client: any = videoClients.find((c: any) => c.business_id === clientId);
+  // Change requests from clients that the team hasn't marked done (migration 0015).
+  const { data: asks } = await admin.from("clip_comments").select("id, body, created_at, author_name, business_id, video_clips(title), businesses(name)")
+    .eq("kind", "change").is("resolved_at", null).order("created_at").limit(50);
 
   return (
     <>
       <PageHeader n={adminNum("/admin/videos")} title="Content uploads" sub="Add photos and videos to any client's Content library, from a shoot or as extras. AI writes the captions; clients pick or schedule them, and their picks show here." />
       {sp.msg && <p className="ok">{sp.msg}</p>}
+
+      {(asks ?? []).length > 0 && (
+        <section className="card stack" style={{ gap: 8, borderColor: "#f2d9b8", background: "#fff8ec" }}>
+          <h2 style={{ fontSize: 22 }}>Change requests ({asks!.length})</h2>
+          {asks!.map((a: any) => (
+            <form key={a.id} action={answerClipComment} className="stack" style={{ gap: 6, borderTop: "1px solid #f2d9b8", paddingTop: 8 }}>
+              <input type="hidden" name="id" value={a.id} />
+              <span><b>{a.businesses?.name}</b> · {a.video_clips?.title ?? "clip"} · <span className="muted">{a.author_name}, {new Date(a.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}</span></span>
+              <span style={{ whiteSpace: "pre-wrap" }}>{a.body}</span>
+              <div className="row" style={{ gap: 8 }}>
+                <input name="body" placeholder="Reply (optional)" style={{ flex: "1 1 220px" }} />
+                <label className="row" style={{ flexDirection: "row", gap: 6, fontWeight: 600 }}><input type="checkbox" name="done" defaultChecked style={{ width: 20, height: 20 }} />Done</label>
+                <button className="btn secondary small">Save</button>
+                <Link href={`/admin/videos?client=${a.business_id}`}>Open client ›</Link>
+              </div>
+            </form>
+          ))}
+        </section>
+      )}
 
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table>

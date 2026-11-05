@@ -212,3 +212,21 @@ export async function sendChosenToCalendar(slug: string, input: { clipIds: strin
   revalidatePath(`/dashboard/${slug}/marketing`);
   return { ok: true, count: rows.length, last: rows[rows.length - 1].scheduled_at };
 }
+
+export type ClipComment = { id: string; author_name: string; from_staff: boolean; kind: "comment" | "change"; body: string; created_at: string; resolved_at: string | null };
+
+/** A comment or change request on a ZDMINC clip or photo. The team sees it on the admin Content uploads page. */
+export async function addClipComment(slug: string, clipId: string, kind: "comment" | "change", body: string): Promise<{ comment: ClipComment } | { error: string }> {
+  const { supabase, business, user, viewingAsStaff } = await requireMembership(slug);
+  const text = body.trim().slice(0, 2000);
+  if (!text) return { error: "Write something first" };
+  const { data: clip } = await supabase.from("video_clips").select("id").eq("id", clipId).eq("business_id", business.id).maybeSingle();
+  if (!clip) return { error: "Clip not found" };
+  const author = user.user_metadata?.full_name || user.user_metadata?.name || (user.email ?? "Client").split("@")[0];
+  const { data, error } = await supabase.from("clip_comments").insert({
+    clip_id: clipId, business_id: business.id, author_id: user.id, author_name: viewingAsStaff ? `${author} (ZDMINC)` : author,
+    from_staff: viewingAsStaff, kind: kind === "change" ? "change" : "comment", body: text,
+  }).select("id, author_name, from_staff, kind, body, created_at, resolved_at").single();
+  if (error || !data) return { error: /clip_comments|relation/i.test(error?.message ?? "") ? "Comments need migration 0015_priority_features.sql first." : error?.message ?? "Couldn't save" };
+  return { comment: data as ClipComment };
+}

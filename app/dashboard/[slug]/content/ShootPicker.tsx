@@ -2,8 +2,9 @@
 
 import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Platform } from "@/lib/posts";
-import { captionClip, decideClip, sendChosenToCalendar } from "./actions";
+import { downloadUrl, type Platform } from "@/lib/posts";
+import { captionClip, decideClip, sendChosenToCalendar, type ClipComment } from "./actions";
+import ClipComments from "./ClipComments";
 import type { Connection } from "./ContentStudio";
 
 export type Shoot = { id: string; month: string; shoot_date: string | null };
@@ -11,7 +12,7 @@ export type Shoot = { id: string; month: string; shoot_date: string | null };
 export const EXTRAS = "extras";
 export type Clip = {
   id: string; shoot_id: string | null; kind: "video" | "image"; title: string; caption: string | null; seconds: number | null;
-  url?: string; thumbUrl?: string; chosen: boolean; skipped: boolean; scheduled: boolean;
+  url?: string; thumbUrl?: string; chosen: boolean; skipped: boolean; scheduled: boolean; comments?: ClipComment[];
 };
 
 const CSS = `
@@ -201,11 +202,18 @@ export default function ShootPicker({ slug, shoots: realShoots, clips: initial, 
               <div className="sp-body">
                 <b>{c.title}</b>
                 <p>{c.caption || <span className="muted">No caption yet</span>}</p>
+                {c.url && (
+                  <span className="row" style={{ gap: 12, fontSize: 13, fontWeight: 700 }}>
+                    <a href={c.url} target="_blank" rel="noreferrer">Open full size ↗</a>
+                    <a href={downloadUrl(c.url, c.title, c.kind)}>Download</a>
+                  </span>
+                )}
                 {canPost && !c.scheduled && (
                   <button type="button" className="sp-write" disabled={writing === c.id} onClick={() => writeFor(c)}>
                     ✨ {writing === c.id ? "Writing…" : c.caption ? "Rewrite caption" : "Write caption"}
                   </button>
                 )}
+                <ClipComments slug={slug} clipId={c.id} initial={c.comments ?? []} />
                 <div className="sp-btns">
                   <button type="button" className={`u${c.chosen ? " on" : ""}`} disabled={c.scheduled} aria-pressed={c.chosen} onClick={() => decide(c, "use")}>{c.scheduled ? "Scheduled" : "Use"}</button>
                   <button type="button" className={`s${c.skipped ? " on" : ""}`} disabled={c.scheduled} aria-pressed={c.skipped} onClick={() => decide(c, "skip")}>Skip</button>

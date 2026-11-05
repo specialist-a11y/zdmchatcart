@@ -55,3 +55,21 @@ export function parseComments(payload: any): IgComment[] {
   }
   return out;
 }
+
+/** Instagram DMs from the messaging webhook. Echoes are messages the shop sent (from the app or the Instagram app). */
+export type IgMessage = { igUserId: string; senderId: string; recipientId: string; mid: string; text: string; isEcho: boolean; at: number };
+export function parseIgMessages(payload: any): IgMessage[] {
+  const out: IgMessage[] = [];
+  if (payload?.object !== "instagram") return out;
+  for (const e of payload.entry ?? []) {
+    for (const m of e.messaging ?? []) {
+      const msg = m.message;
+      if (!msg?.mid || msg.is_deleted || !m.sender?.id || !m.recipient?.id) continue;
+      const text = typeof msg.text === "string" && msg.text.trim() ? msg.text
+        : (msg.attachments ?? []).length ? `[${(msg.attachments[0]?.type ?? "attachment")}]` : "";
+      if (!text) continue;
+      out.push({ igUserId: String(e.id), senderId: String(m.sender.id), recipientId: String(m.recipient.id), mid: String(msg.mid), text, isEcho: !!msg.is_echo, at: Number(m.timestamp) || Date.now() });
+    }
+  }
+  return out;
+}

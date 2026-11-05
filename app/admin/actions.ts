@@ -111,13 +111,16 @@ export async function savePlan(f: FormData) {
   await requireStaffManager();
   const price = Number(str(f, "monthly_price"));
   if (!Number.isFinite(price) || price < 0) back("/admin/billing", "Price must be a number");
-  await createAdminClient().from("plans").update({
+  const row = {
     name: str(f, "name"), monthly_price: price, description: str(f, "description"),
     video_clips: Number(str(f, "video_clips")) || 0, posts_per_month: Number(str(f, "posts_per_month")) || 0, seats: Number(str(f, "seats")) || 1,
     contacts_included: Math.max(0, Math.round(Number(str(f, "contacts_included")) || 0)),
     extra_contacts_price: Math.max(0, Number(str(f, "extra_contacts_price")) || 0),
     active: f.get("active") === "on",
-  }).eq("id", str(f, "id"));
+  };
+  const db = createAdminClient();
+  const { error } = await db.from("plans").update({ ...row, image_posts: Math.max(0, Math.round(Number(str(f, "image_posts")) || 0)) }).eq("id", str(f, "id"));
+  if (error && /image_posts/.test(error.message)) await db.from("plans").update(row).eq("id", str(f, "id")); // before 0015
   back("/admin/billing", "Plan saved. Existing clients pay the new price from their next renewal.");
 }
 

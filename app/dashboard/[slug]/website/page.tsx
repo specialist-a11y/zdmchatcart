@@ -5,6 +5,7 @@ import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PageHeader } from "@/components/CrmShell";
 import { CopyButton } from "@/components/CopyButton";
+import { QrButton } from "@/components/QrButton";
 import { num } from "@/lib/crm-nav";
 import { dnsRecord, normaliseDomain, shortUrl, slugifyCode, validCode, validRef } from "@/lib/links";
 import { addDomainToHost, checkDomain, removeDomainFromHost } from "@/lib/domains";
@@ -117,7 +118,7 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
       <div className="cols">
         <section className="card stack" style={{ gap: 8 }}>
           <h2>Your shop link</h2>
-          <div className="row" style={{ gap: 8 }}><code style={{ wordBreak: "break-all", fontSize: 15, flex: "1 1 200px" }}>{shopUrl}</code><CopyButton text={shopUrl} /></div>
+          <div className="row" style={{ gap: 8 }}><code style={{ wordBreak: "break-all", fontSize: 15, flex: "1 1 200px" }}>{shopUrl}</code><CopyButton text={shopUrl} /><QrButton url={shopUrl} name={`${slug}-shop`} /></div>
           <span className="muted">Put it in your Instagram bio and WhatsApp profile. For posts, Stories and ads, make a short link below so each one's sales are counted.</span>
         </section>
         <section className="card stack" style={{ gap: 8 }}>
@@ -190,7 +191,7 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
                 const url = shortUrl(l.code, live?.domain);
                 return (
                   <tr key={l.id}>
-                    <td><div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><code>{url.replace(/^https?:\/\//, "")}</code><CopyButton text={url} /></div></td>
+                    <td><div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><code>{url.replace(/^https?:\/\//, "")}</code><CopyButton text={url} /><QrButton url={url} name={`${slug}-${l.code}`} /></div></td>
                     <td>{l.label}<br /><span className="muted" style={{ fontSize: 12 }}>tracks as {l.ref}</span></td>
                     <td><b>{l.clicks}</b></td>
                     <td><b>{s?.n ?? 0}</b>{l.clicks > 0 && s ? <span className="muted" style={{ fontSize: 12 }}> · {Math.round((s.n / l.clicks) * 100)}%</span> : null}</td>

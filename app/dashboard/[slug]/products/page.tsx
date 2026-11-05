@@ -12,7 +12,7 @@ export default async function ProductsPage({ params }: { params: Promise<{ slug:
 
   const items: Item[] = (products ?? []).map((p: any) => ({
     id: p.id, kind: p.kind ?? "product", name: p.name, description: p.description, category: p.category ?? null,
-    price: Number(p.price), price_note: p.price_note ?? null, stock: p.stock, image_url: p.image_url, active: p.active, variants: p.variants ?? [],
+    price: Number(p.price), price_note: p.price_note ?? null, stock: p.stock, image_url: p.image_url, active: p.active, variants: p.variants ?? [], featured: !!p.featured,
   }));
 
   return (

@@ -54,3 +54,9 @@ test("crop frames for horizontal media", () => {
   assert.deepEqual(frameFor(1920, 1080, 9 / 16), { x: 656, y: 0, w: 608, h: 1080 });
   assert.deepEqual(frameFor(1000, 2000, 4 / 5), { x: 0, y: 375, w: 1000, h: 1250 });
 });
+
+test("download links name the file", async () => {
+  const { downloadUrl } = await import("../lib/posts.ts");
+  assert.equal(downloadUrl("https://x/v.mp4?token=a", "Black cake reel!", "video"), "https://x/v.mp4?token=a&download=Black-cake-reel.mp4");
+  assert.equal(downloadUrl("https://x/p", "", "image"), "https://x/p?download=content.jpg");
+});

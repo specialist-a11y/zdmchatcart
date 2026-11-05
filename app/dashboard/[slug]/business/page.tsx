@@ -5,6 +5,9 @@ import { redirect } from "next/navigation";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { logEvent } from "@/lib/zdm-billing";
+import LogoField from "./LogoField";
+import HoursEditor from "./HoursEditor";
+import { cleanHours, hasHours, hoursSummary } from "@/lib/hours";
 
 const str = (f: FormData, k: string, max = 300) => String(f.get(k) ?? "").trim().slice(0, max);
 const who = (u: { email?: string | null; user_metadata?: any }) => u.user_metadata?.full_name || u.user_metadata?.name || (u.email ?? "Client").split("@")[0];
@@ -50,6 +53,19 @@ async function saveBusinessInfo(f: FormData) {
     contact_email: contactEmail || null,
   }).eq("id", business.id);
   if (error) back(error.message);
+  // Hours by day and holiday closure (migration 0015). The text version keeps receipts and older pages right.
+  let hours = {} as ReturnType<typeof cleanHours>;
+  try { hours = cleanHours(JSON.parse(String(f.get("hours") ?? "{}"))); } catch { /* keep empty */ }
+  const { data: prev } = await admin.from("businesses").select("hours").eq("id", business.id).maybeSingle();
+  const closedUntil = str(f, "closed_until", 10);
+  if (closedUntil && !/^\d{4}-\d{2}-\d{2}$/.test(closedUntil)) back("Pick the last day you're closed");
+  const { error: hErr } = await admin.from("businesses").update({
+    hours: hasHours(hours) ? hours : null,
+    closed_until: closedUntil || null,
+    closed_note: str(f, "closed_note", 200) || null,
+    ...(hasHours(hours) && (!str(f, "opening_hours") || str(f, "opening_hours", 400) === hoursSummary(cleanHours(prev?.hours))) ? { opening_hours: hoursSummary(hours) } : {}),
+  }).eq("id", business.id);
+  if (hErr && f.get("hours")) back("Saved, but opening hours by day need a database update: run supabase/migrations/0015_priority_features.sql.");
   await logEvent(admin, business.id, { id: user.id, name: viewingAsStaff ? `${who(user)} (ZDMINC)` : who(user) }, "contact", "Business info updated");
   back("Saved. Your shop page shows the changes now.");
 }
@@ -57,8 +73,9 @@ async function saveBusinessInfo(f: FormData) {
 export default async function BusinessInfoPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
   const { msg } = await searchParams;
-  const { business, role } = await requireMembership(slug);
+  const { supabase, business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
+  const { data: hb } = await supabase.from("businesses").select("hours, closed_until, closed_note").eq("id", business.id).maybeSingle();
   const { data: priv } = canEdit
     ? await createAdminClient().from("businesses").select("contact_name, contact_phone, contact_email").eq("id", business.id).single()
     : { data: null };
@@ -80,8 +97,8 @@ export default async function BusinessInfoPage({ params, searchParams }: { param
             <label>Tagline<input name="tagline" maxLength={120} defaultValue={business.tagline ?? ""} placeholder="Fresh Bajan bakes, ordered on WhatsApp" /></label>
           </div>
           <label>About the business<textarea name="description" rows={3} maxLength={600} defaultValue={business.description ?? ""} placeholder="Two or three sentences for your shop page." /></label>
+          <LogoField slug={slug} initial={business.logo_url} disabled={!canEdit} />
           <div className="cols">
-            <label>Logo link (https://)<input name="logo_url" type="url" defaultValue={business.logo_url ?? ""} /></label>
             <label>Brand colour<input name="brand_color" type="color" defaultValue={business.brand_color} /></label>
             <label>Order code prefix<input name="order_prefix" required pattern="[A-Za-z]{1,4}" defaultValue={business.order_prefix} /></label>
           </div>
@@ -96,9 +113,23 @@ export default async function BusinessInfoPage({ params, searchParams }: { param
           </div>
           <div className="cols">
             <label>Address or pickup point<textarea name="address" rows={3} defaultValue={business.address ?? ""} placeholder={"Queen Street\nSpeightstown, St Peter"} /></label>
-            <label>Opening hours<textarea name="opening_hours" rows={3} defaultValue={business.opening_hours ?? ""} placeholder={"Tue to Fri 8am to 5pm\nSat 7am to 2pm"} /></label>
+
             <label>Pickup and delivery<textarea name="delivery_info" rows={3} defaultValue={business.delivery_info ?? ""} placeholder={"Pickup from the shop\nDelivery island-wide Saturdays, BBD $20"} /></label>
           </div>
+        </section>
+
+        <section className="card stack" id="hours">
+          <h2>Opening hours</h2>
+          <HoursEditor initial={cleanHours(hb?.hours)} disabled={!canEdit} />
+          <details>
+            <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Hours as text (optional)</summary>
+            <label>Shown on receipts and your website. Leave blank to use the hours above.<textarea name="opening_hours" rows={2} defaultValue={business.opening_hours ?? ""} placeholder={"Tue to Fri 8am to 5pm\nSat 7am to 2pm"} /></label>
+          </details>
+          <div className="cols">
+            <label>Holiday closure: closed until (last day closed)<input name="closed_until" type="date" defaultValue={hb?.closed_until ?? ""} /></label>
+            <label>Note for customers<input name="closed_note" maxLength={200} defaultValue={hb?.closed_note ?? ""} placeholder="Closed for Christmas" /></label>
+          </div>
+          <span className="muted" style={{ fontSize: 13 }}>While you're closed for a holiday, your website shows the note and the reopening date. Clear the date when you're back.</span>
         </section>
 
         <section className="card stack">

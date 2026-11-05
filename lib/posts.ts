@@ -61,3 +61,9 @@ export function igCrop(w: number, h: number) {
   if (ratio > 1.91) { const nw = Math.round(h * 1.91); return { x: Math.round((w - nw) / 2), y: 0, w: nw, h }; }
   return { x: 0, y: 0, w, h };
 }
+
+/** Signed storage links download (instead of play) when ?download=name is added. */
+export function downloadUrl(url: string, title: string, kind: string) {
+  const name = `${(title || "content").replace(/[^a-z0-9 _-]+/gi, "").trim().replace(/\s+/g, "-").slice(0, 60) || "content"}.${kind === "video" ? "mp4" : "jpg"}`;
+  return `${url}${url.includes("?") ? "&" : "?"}download=${encodeURIComponent(name)}`;
+}

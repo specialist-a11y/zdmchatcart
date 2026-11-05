@@ -49,17 +49,18 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
       <h2>Plans</h2>
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table>
-          <thead><tr><th>Plan</th><th>Monthly (BBD)</th><th>Includes</th><th>Clips</th><th>AI posts</th><th>Seats</th><th>Contacts incl.</th><th>Per extra 1,000</th><th>On sale</th><th>Clients</th><th /></tr></thead>
+          <thead><tr><th>Plan</th><th>Monthly (BBD)</th><th>Includes</th><th>Clips</th><th>Image posts</th><th>AI posts</th><th>Seats</th><th>Contacts incl.</th><th>Per extra 1,000</th><th>On sale</th><th>Clients</th><th /></tr></thead>
           <tbody>
             {(plans ?? []).map((p) => (
               <tr key={p.id}>
-                <td colSpan={11} style={{ padding: 0 }}>
+                <td colSpan={12} style={{ padding: 0 }}>
                   <form action={savePlan} className="planrow">
                     <input type="hidden" name="id" value={p.id} />
                     <input name="name" defaultValue={p.name} disabled={!manager} aria-label="Plan name" />
                     <input name="monthly_price" type="number" step="0.01" min="0" defaultValue={p.monthly_price} disabled={!manager} aria-label="Monthly price" />
                     <input name="description" defaultValue={p.description ?? ""} disabled={!manager} aria-label="Includes" />
                     <input name="video_clips" type="number" min="0" defaultValue={p.video_clips} disabled={!manager} aria-label="Clips a month" />
+                    <input name="image_posts" type="number" min="0" defaultValue={(p as any).image_posts ?? 0} disabled={!manager} aria-label="ZDMINC image posts a month" />
                     <input name="posts_per_month" type="number" min="0" defaultValue={p.posts_per_month} disabled={!manager} aria-label="AI posts a month" />
                     <input name="seats" type="number" min="1" defaultValue={p.seats} disabled={!manager} aria-label="Seats" />
                     <input name="contacts_included" type="number" min="0" step="100" defaultValue={p.contacts_included} disabled={!manager} aria-label="Contacts included" />

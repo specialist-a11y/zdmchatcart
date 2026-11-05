@@ -7,6 +7,8 @@ import { campaignStats, totals, KIND, STATUS } from "@/lib/ads";
 import { maxSpend, todayIn } from "@/lib/billing";
 import { money } from "@/lib/staff";
 import { createInvoice, logEvent, walletBalance } from "@/lib/zdm-billing";
+import { walletLow } from "@/lib/health";
+import AdPreview from "@/components/AdPreview";
 import { audienceSummary } from "@/lib/audience";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -70,7 +72,9 @@ export default async function AdsPage({ params, searchParams }: { params: Promis
   const budget = b?.ad_budget_monthly != null ? Number(b.ad_budget_monthly) : null;
   const waiting = rows.filter((r) => r.status === "needs_approval");
   const clipIds = waiting.map((r) => r.clip_id).filter(Boolean) as string[];
-  const { data: clips } = clipIds.length ? await supabase.from("video_clips").select("id, title, storage_path").in("id", clipIds) : { data: [] as any[] };
+  const { data: clips } = clipIds.length ? await supabase.from("video_clips").select("id, title, storage_path, kind").in("id", clipIds) : { data: [] as any[] };
+  const { data: igc } = waiting.length ? await supabase.from("integrations").select("config").eq("business_id", business.id).eq("provider", "instagram").maybeSingle<any>() : { data: null };
+  const shopLink = `${process.env.NEXT_PUBLIC_SITE_URL ?? ""}/s/${slug}`;
   const { data: signed } = clips?.length ? await supabase.storage.from("client-videos").createSignedUrls(clips.map((c) => c.storage_path), 3600) : { data: [] };
   const clipFor = (id: string | null) => clips?.find((c) => c.id === id);
   const urlFor = (p?: string) => signed?.find((s) => s.path === p)?.signedUrl ?? undefined;
@@ -96,7 +100,8 @@ export default async function AdsPage({ params, searchParams }: { params: Promis
               <section key={r.id} className="card stack" style={{ borderColor: "var(--blue)", borderWidth: 2.5 }}>
                 <div className="row" style={{ justifyContent: "space-between" }}><h2>Needs your OK</h2><span className="badge sent">{r.code}</span></div>
                 <div className="row" style={{ alignItems: "flex-start", gap: 18 }}>
-                  {clip && urlFor(clip.storage_path) && <video src={urlFor(clip.storage_path)} controls preload="metadata" style={{ width: 200, aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 12, background: "#000" }} />}
+                  <AdPreview mediaUrl={clip ? urlFor(clip.storage_path) : undefined} isImage={clip?.kind === "image"} caption={r.caption ?? ""} name={business.name}
+                    username={igc?.config?.ig_username} logo={business.logo_url} link={shopLink} placements={(r as any).placements ?? null} />
                   <div className="stack" style={{ flex: 1, minWidth: 240, gap: 8 }}>
                     <strong style={{ fontSize: 18 }}>{r.name}</strong>
                     <span className="muted">{KIND[r.kind]}</span>
@@ -152,8 +157,9 @@ export default async function AdsPage({ params, searchParams }: { params: Promis
             <form action={topUp} className="card stack">
               <h2>Ad wallet</h2>
               <input type="hidden" name="slug" value={slug} />
-              <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 40, fontWeight: 800, color: (balance ?? 0) < 50 ? "var(--coral)" : undefined }}>{money(balance ?? 0)}</span>
-              {(balance ?? 0) < 50 && <p className="error" style={{ margin: 0 }}>Running low. Ads pause when the wallet can't cover a day's budget.</p>}
+              <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 40, fontWeight: 800, color: walletLow(balance ?? 0, budget) ? "var(--coral)" : undefined }}>{money(balance ?? 0)}</span>
+              {walletLow(balance ?? 0, budget) ? <p className="error" style={{ margin: 0 }}>Running low. Ads pause when the wallet can&apos;t cover a day&apos;s budget. We send you a WhatsApp reminder too.</p>
+                : <p className="muted" style={{ margin: 0, fontSize: 13 }}>We WhatsApp you when it drops below BBD 50 or 3 days of your ad budget.</p>}
               {(entries ?? []).map((e: any, i: number) => <div key={i} className="row" style={{ justifyContent: "space-between", fontSize: 14 }}><span className="muted">{e.kind === "topup" ? "Top-up" : e.kind === "spend" ? `Spend ${e.day ?? ""}` : e.note}</span><strong>{Number(e.amount) > 0 ? "+" : ""}{money(e.amount)}</strong></div>)}
               {canApprove && <><label>Top up (BBD)<input name="amount" type="number" min="20" step="10" defaultValue={budget ?? 300} /></label><button className="btn blue small" style={{ alignSelf: "flex-start" }}>Top up with Fygaro</button></>}
             </form>

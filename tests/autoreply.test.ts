@@ -36,3 +36,18 @@ test("parses Instagram comment webhooks", () => {
   assert.deepEqual(parseComments(p), [{ igUserId: "17841", commentId: "c1", text: "CAKE", mediaId: "m1", fromId: "u1", fromUsername: "tara.best" }]);
   assert.deepEqual(parseComments({ object: "page" }), []);
 });
+
+test("instagram DMs parse, with echoes and attachments", async () => {
+  const { parseIgMessages } = await import("../lib/autoreply.ts");
+  const p = { object: "instagram", entry: [{ id: "IG1", messaging: [
+    { sender: { id: "U1" }, recipient: { id: "IG1" }, timestamp: 1, message: { mid: "m1", text: "Hi, price for black cake?" } },
+    { sender: { id: "IG1" }, recipient: { id: "U1" }, timestamp: 2, message: { mid: "m2", text: "BBD 60", is_echo: true } },
+    { sender: { id: "U1" }, recipient: { id: "IG1" }, timestamp: 3, message: { mid: "m3", attachments: [{ type: "image" }] } },
+    { sender: { id: "U1" }, recipient: { id: "IG1" }, timestamp: 4, read: { mid: "m1" } },
+  ] }] };
+  const out = parseIgMessages(p);
+  assert.equal(out.length, 3);
+  assert.equal(out[1].isEcho, true);
+  assert.equal(out[2].text, "[image]");
+  assert.deepEqual(parseIgMessages({ object: "page" }), []);
+});

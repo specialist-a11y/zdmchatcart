@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { preparePhoto, readMedia, videoThumb } from "@/lib/media-prep";
-import { checkPost, MAX_CAPTION, MAX_ITEMS, postShape, type MediaKind, type Platform } from "@/lib/posts";
+import { checkPost, MAX_CAPTION, MAX_ITEMS, postShape, downloadUrl, type MediaKind, type Platform } from "@/lib/posts";
 import { deleteContent, getContentUploadUrl, registerContent, schedulePost, suggestCaption, toggleClip } from "./actions";
 import CropDialog, { type CropChoice } from "./CropDialog";
 
@@ -47,9 +47,11 @@ const CSS = `
 .cs-plat label:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .cs-count { font-size: 12px; color: var(--muted); text-align: right; }
 .cs-eye { position: absolute; bottom: 8px; right: 8px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255,255,255,.92); display: grid; place-items: center; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.25); }
-.cs-light { position: fixed; inset: 0; z-index: 90; background: rgba(11,15,14,.85); display: grid; place-items: center; padding: 20px; }
-.cs-light video, .cs-light img { max-width: min(92vw, 720px); max-height: 82vh; border-radius: 12px; background: #000; }
-.cs-light button { position: absolute; top: 16px; right: 16px; }
+.cs-light { position: fixed; inset: 0; z-index: 90; background: rgba(11,15,14,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 64px 8px 16px; }
+.cs-light video, .cs-light img { max-width: 100%; max-height: calc(100dvh - 140px); border-radius: 12px; background: #000; object-fit: contain; }
+.cs-light .cs-light-bar { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.cs-light .cs-light-bar .btn { min-height: 44px; }
+.cs-light .cs-light-title { color: #fff; font-weight: 700; font-size: 15px; text-align: center; max-width: 92vw; overflow-wrap: anywhere; }
 .cs-ai { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid var(--blue); color: var(--teal); background: var(--teal-soft); border-radius: 999px; padding: 4px 12px; font-weight: 700; font-size: 13px; cursor: pointer; }
 .cs-ai:disabled { opacity: .6; cursor: wait; }
 @media (max-width: 900px) { .cs-composer { grid-template-columns: 1fr; bottom: 0; border-radius: 18px 18px 0 0; } .cs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -334,10 +336,18 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
 
       {preview?.url && (
         <div className="cs-light" role="dialog" aria-modal="true" aria-label={preview.title} onClick={() => setPreview(null)}>
-          <button type="button" className="btn secondary small" onClick={() => setPreview(null)}>Close ✕</button>
+          <div className="cs-light-bar" onClick={(e) => e.stopPropagation()}>
+            <button type="button" className="btn secondary small" onClick={() => {
+              const el = document.querySelector<HTMLElement>(".cs-light video, .cs-light img");
+              (el as any)?.requestFullscreen?.() ?? (el as any)?.webkitEnterFullscreen?.();
+            }}>Full screen</button>
+            <a className="btn secondary small" href={downloadUrl(preview.url, preview.title, preview.kind)}>Download</a>
+            <button type="button" className="btn small" onClick={() => setPreview(null)}>Close ✕</button>
+          </div>
           {preview.kind === "video"
             ? <video src={preview.url} poster={preview.thumbUrl} controls autoPlay playsInline onClick={(e) => e.stopPropagation()} />
             : <img src={preview.url} alt={preview.title} onClick={(e) => e.stopPropagation()} />}
+          <span className="cs-light-title">{preview.title}</span>
         </div>
       )}
     </div>

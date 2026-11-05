@@ -1,3 +1,4 @@
+import { TicketAttachments, signAttachments } from "@/components/TicketAttachments";
 import { PageHeader } from "@/components/CrmShell";
 import { adminNum } from "@/lib/crm-nav";
 import Link from "next/link";
@@ -26,6 +27,7 @@ export default async function SupportPage({ searchParams }: { searchParams: Prom
     ? await admin.from("support_tickets").select("*, businesses(id, name, contact_name, contact_phone, subscriptions(plan_id, status))").eq("number", selectedNumber).maybeSingle()
     : { data: null };
   const { data: thread } = t ? await admin.from("ticket_messages").select("*").eq("ticket_id", t.id).order("created_at") : { data: [] };
+  const files = await signAttachments(admin as any, thread ?? []);
   const link = (extra: Record<string, string | undefined>) => {
     const p = new URLSearchParams(Object.entries({ s: status, mine: sp.mine, ...extra }).filter(([, v]) => v) as [string, string][]);
     return `/admin/support?${p}`;
@@ -71,6 +73,7 @@ export default async function SupportPage({ searchParams }: { searchParams: Prom
                 <div key={m.id} className={`msg ${m.internal ? "note" : m.from_staff ? "staff" : ""}`}>
                   <div className="meta"><strong>{m.author_name}{m.internal ? " · internal note" : ""}</strong><span>{new Date(m.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span></div>
                   {m.body}
+                  <TicketAttachments items={m.attachments} urls={files} />
                 </div>
               ))}
               <form action={staffReply} className="stack">

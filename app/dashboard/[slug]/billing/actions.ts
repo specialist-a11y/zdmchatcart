@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { changePlan, logEvent } from "@/lib/zdm-billing";
+import { changePlan, logEvent, zdmFygaro } from "@/lib/zdm-billing";
+import { buildPaymentUrl } from "@/lib/fygaro";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const who = (u: { email?: string | null; user_metadata?: any }) => u.user_metadata?.full_name || u.user_metadata?.name || (u.email ?? "Client").split("@")[0];
@@ -45,4 +46,22 @@ export async function saveBillingDetails(f: FormData) {
   }).eq("id", business.id);
   await logEvent(admin, business.id, { id: user.id, name: who(user) }, "contact", "Billing details updated by client");
   redirect(`/dashboard/${slug}/billing?msg=${encodeURIComponent("Billing details saved")}`);
+}
+
+/** Pay an open invoice online. Makes a fresh Fygaro link if there isn't one or it may have expired. */
+export async function payInvoice(f: FormData) {
+  const slug = str(f, "slug");
+  const { business } = await requireBillingAdmin(slug);
+  const admin = createAdminClient();
+  const { data: inv } = await admin.from("invoices").select("id, number, amount, currency, status, payment_url, created_at").eq("business_id", business.id).eq("number", str(f, "number")).maybeSingle();
+  const back = (m: string): never => redirect(`/dashboard/${slug}/billing?msg=${encodeURIComponent(m)}`);
+  if (!inv || !["sent", "overdue"].includes(inv.status)) back("That invoice isn't open");
+  // Links last 30 days; renew a little before that.
+  const fresh = inv!.payment_url && Date.now() - Date.parse(inv!.created_at) < 25 * 864e5;
+  if (fresh) redirect(inv!.payment_url!);
+  const fy = zdmFygaro();
+  if (!fy || !(Number(inv!.amount) > 0)) back("Online payment isn't set up for this invoice yet. ZDMINC will send you a link.");
+  const url = buildPaymentUrl({ ...fy!, amount: Number(inv!.amount), currency: inv!.currency, reference: inv!.id, expiresInSeconds: 30 * 24 * 3600 });
+  await admin.from("invoices").update({ payment_url: url }).eq("id", inv!.id);
+  redirect(url);
 }

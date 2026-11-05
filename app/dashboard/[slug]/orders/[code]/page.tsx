@@ -6,6 +6,7 @@ import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ensurePaymentLink, sendFromBusiness, sendReceipt } from "@/lib/payments";
 import { receiptUrl } from "@/lib/receipt";
+import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary, waLink } from "@/lib/order-text";
 
 const NEXT_STATUSES = ["awaiting_payment", "paid", "ready", "fulfilled", "cancelled"] as const;
@@ -121,8 +122,23 @@ export default async function OrderPage({ params, searchParams }: {
       }
     } else {
       await supabase.from("orders").update({ status }).eq("business_id", business.id).eq("code", code);
+      if (status === "ready" && formData.get("notify") === "on") {
+        const admin = createAdminClient();
+        const { data: o } = await admin.from("orders").select("id").eq("business_id", business.id).eq("code", code).single();
+        const res = o ? await sendReadyMessage(admin, o.id) : { ok: false, error: "Order not found" };
+        redirect(`${path}?msg=${encodeURIComponent(res.ok ? "Marked ready. The customer got a WhatsApp message." : `Marked ready. Message not sent: ${res.error}`)}`);
+      }
     }
     revalidatePath(path);
+  }
+
+  async function notifyReady() {
+    "use server";
+    const { business } = await requireMembership(slug);
+    const admin = createAdminClient();
+    const { data: o } = await admin.from("orders").select("id").eq("business_id", business.id).eq("code", code).single();
+    const res = o ? await sendReadyMessage(admin, o.id) : { ok: false, error: "Order not found" };
+    redirect(`${path}?msg=${encodeURIComponent(res.ok ? "Ready message sent on WhatsApp" : `Not sent: ${res.error}`)}`);
   }
 
   const customerPhone = order.customers?.phone as string | undefined;
@@ -211,8 +227,15 @@ export default async function OrderPage({ params, searchParams }: {
           </select>
         </label>
         {!order.paid_at && customerPhone && <label className="row" style={{ gap: 6, alignSelf: "flex-end", fontWeight: 500 }}><input type="checkbox" name="receipt" defaultChecked style={{ width: "auto" }} />Send receipt if marked paid</label>}
+        {customerPhone && order.status !== "ready" && !order.ready_notified_at && <label className="row" style={{ gap: 6, alignSelf: "flex-end", fontWeight: 500 }}><input type="checkbox" name="notify" defaultChecked style={{ width: "auto" }} />Message the customer if marked ready</label>}
         <button className="btn" style={{ alignSelf: "flex-end" }}>Save</button>
       </form>
+      {customerPhone && order.status === "ready" && (
+        <form action={notifyReady} className="card row" style={{ justifyContent: "space-between" }}>
+          <span className="muted">{order.ready_notified_at ? `Ready message sent ${new Date(order.ready_notified_at).toLocaleString("en-BB", { timeZone: "America/Barbados", dateStyle: "medium", timeStyle: "short" })}.` : "The customer hasn't been told it's ready."}</span>
+          <button className="btn secondary">{order.ready_notified_at ? "Send again" : "Tell the customer it's ready"}</button>
+        </form>
+      )}
     </div>
   );
 }

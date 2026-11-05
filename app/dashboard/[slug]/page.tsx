@@ -5,19 +5,22 @@ import { PageHeader, Kpi } from "@/components/CrmShell";
 import { Icon } from "@/components/Icon";
 import { num } from "@/lib/crm-nav";
 import { insights, type OrderLite } from "@/lib/insights";
+import { ago } from "@/lib/journeys";
+import { nudgeOrder } from "./today-actions";
 
 const PAID = ["paid", "ready", "fulfilled"];
 const DAY = 864e5;
 const tz = "America/Barbados";
 const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz }).format(new Date(iso));
 
-export default async function TodayPage({ params }: { params: Promise<{ slug: string }> }) {
+export default async function TodayPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
+  const { msg } = await searchParams;
   const { supabase, business, user } = await requireMembership(slug);
   const base = `/dashboard/${slug}`;
   const now = Date.now();
   const since30 = new Date(now - 30 * DAY).toISOString();
-  const [{ data: orders }, { data: products }, { data: msgs }, { count: newCustomers }, { count: adsOk }, { count: toChoose }, { count: noPhone }] = await Promise.all([
+  const [{ data: orders }, { data: products }, { data: msgs }, { count: newCustomers }, { count: adsOk }, { count: toChoose }, { count: noPhone }, { count: quiet }, { data: openOrders }] = await Promise.all([
     supabase.from("orders").select("id, code, status, source, total, created_at, paid_at, order_items(product_id, name, quantity, unit_price)").eq("business_id", business.id).gte("created_at", since30).order("created_at", { ascending: false }).limit(2000),
     supabase.from("products").select("id, name, active, created_at").eq("business_id", business.id),
     supabase.from("messages").select("customer_id, direction, created_at, body, customers(name, phone)").eq("business_id", business.id).gte("created_at", new Date(now - 7 * DAY).toISOString()).order("created_at", { ascending: false }).limit(400),
@@ -25,6 +28,9 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
     supabase.from("ad_campaigns").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "needs_approval"),
     supabase.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "published").eq("chosen", false).eq("source", "zdm"),
     supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "awaiting_confirmation"),
+    supabase.from("customers").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("stage", "quiet"),
+    supabase.from("orders").select("code, status, total, created_at, customers(name, phone)").eq("business_id", business.id)
+      .in("status", ["awaiting_payment", "awaiting_confirmation"]).order("created_at", { ascending: false }).limit(6),
   ]);
   const all = (orders ?? []) as unknown as OrderLite[];
   const paid = all.filter((o) => PAID.includes(o.status));
@@ -63,13 +69,22 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
   const waiting = [...lastBy.values()].filter((m) => m.direction === "in");
 
   const tips = insights(all, (products ?? []) as any, now);
-  const needs = [
-    waiting.length && { icon: "inbox", t: `${waiting.length} chat${waiting.length > 1 ? "s are" : " is"} waiting for you`, d: waiting.slice(0, 2).map((m) => `${m.customers?.name ?? "+" + (m.customers?.phone ?? "")}: ${String(m.body ?? "").slice(0, 40)}`).join("; "), go: "Open inbox", href: `${base}/inbox` },
-    noPhone && { icon: "orders", t: `${noPhone} order${noPhone > 1 ? "s need" : " needs"} confirming`, d: "Started on the website, not confirmed in WhatsApp yet.", go: "Review", href: `${base}/orders?status=awaiting_confirmation` },
-    awaiting.length && { icon: "card", t: `${awaiting.length} payment link${awaiting.length > 1 ? "s" : ""} not paid yet`, d: `${money(sum(awaiting), business.currency)} waiting.`, go: "See orders", href: `${base}/orders?status=awaiting_payment` },
-    adsOk && { icon: "ads", t: `${adsOk} ad${adsOk > 1 ? "s need" : " needs"} your OK`, d: "ZDMINC is ready to launch.", go: "Approve", href: `${base}/ads` },
-    toChoose && { icon: "videos", t: `${toChoose} ZDMINC clip${toChoose > 1 ? "s" : ""} not picked yet`, d: "Pick the ones you want posted, or schedule them yourself.", go: "Choose", href: `${base}/content` },
-  ].filter(Boolean) as { icon: string; t: string; d: string; go: string; href: string }[];
+  // Needs you: one line per thing, each with the button that deals with it.
+  type Need = { key: string; icon: string; t: string; d: string; go: string; href?: string; code?: string };
+  const who = (c: any) => c?.name ?? (c?.phone ? "+" + c.phone : "A customer");
+  const unpaid = (openOrders ?? []).filter((o: any) => o.status === "awaiting_payment");
+  const unconfirmed = (openOrders ?? []).filter((o: any) => o.status === "awaiting_confirmation");
+  const needs: Need[] = [
+    ...waiting.slice(0, 3).map((m): Need => ({ key: `c${m.customer_id}`, icon: "inbox", t: `${who(m.customers)} waiting ${ago(m.created_at, now)}`, d: String(m.body ?? "").slice(0, 60), go: "Reply", href: `${base}/inbox?c=${m.customer_id}` })),
+    ...(waiting.length > 3 ? [{ key: "chats", icon: "inbox", t: `${waiting.length - 3} more chat${waiting.length - 3 > 1 ? "s" : ""} waiting`, d: "Oldest first in the inbox.", go: "Open inbox", href: `${base}/inbox` }] : []),
+    ...unpaid.slice(0, 3).map((o: any): Need => ({ key: o.code, icon: "card", t: `${o.code} unpaid ${ago(o.created_at, now)}`, d: `${who(o.customers)} · ${money(o.total, business.currency)}`, go: "Send link", code: o.customers?.phone ? o.code : undefined, href: `${base}/orders/${o.code}` })),
+    ...(awaiting.length > 3 ? [{ key: "unpaid", icon: "card", t: `${awaiting.length - 3} more unpaid`, d: `${money(sum(awaiting), business.currency)} waiting in all.`, go: "See orders", href: `${base}/orders?status=awaiting_payment` }] : []),
+    ...unconfirmed.slice(0, 2).map((o: any): Need => ({ key: o.code, icon: "orders", t: `${o.code} not confirmed`, d: "Started on the website, not confirmed in WhatsApp yet.", go: "Open", href: `${base}/orders/${o.code}` })),
+    ...((noPhone ?? 0) > 2 ? [{ key: "unconf", icon: "orders", t: `${(noPhone ?? 0) - 2} more to confirm`, d: "Website orders waiting for the customer's WhatsApp message.", go: "Review", href: `${base}/orders?status=awaiting_confirmation` }] : []),
+    ...(quiet ? [{ key: "quiet", icon: "customers", t: `${quiet} customer${quiet > 1 ? "s" : ""} went quiet`, d: "No order or message in 45 days or more.", go: "Win back", href: `${base}/customers?stage=quiet` }] : []),
+    ...(adsOk ? [{ key: "ads", icon: "ads", t: `${adsOk} ad${adsOk > 1 ? "s need" : " needs"} your OK`, d: "ZDMINC is ready to launch.", go: "Approve", href: `${base}/ads` }] : []),
+    ...(toChoose ? [{ key: "clips", icon: "videos", t: `${toChoose} ZDMINC clip${toChoose > 1 ? "s" : ""} not picked yet`, d: "Pick the ones you want posted, or schedule them yourself.", go: "Choose", href: `${base}/content` }] : []),
+  ];
 
   const first = (user.user_metadata?.full_name || user.user_metadata?.name || "").split(" ")[0];
   const dateLine = new Date().toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long", timeZone: tz });
@@ -79,6 +94,7 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
       <PageHeader n={num("")} title="Today" sub={`${first ? `Good ${Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: tz }).format(new Date())) < 12 ? "morning" : Number(new Intl.DateTimeFormat("en-GB", { hour: "numeric", hour12: false, timeZone: tz }).format(new Date())) < 17 ? "afternoon" : "evening"}, ${first}. ` : ""}${dateLine}.`}
         actions={<Link className="btn small" href={`${base}/orders`}><Icon name="orders" size={16} />Orders</Link>} />
 
+      {msg && <p className={/^Not sent|more than 24|Connect|not found|no customer/i.test(msg) ? "error" : "ok"}>{msg}</p>}
       <section className="insight" aria-label="Zero guesswork">
         <div><h2>Zero guesswork</h2><small>What the last 30 days say</small></div>
         <div><span className="tag">SCALE</span><b>{tips.scale.title}</b><small>{tips.scale.detail}</small></div>
@@ -98,11 +114,13 @@ export default async function TodayPage({ params }: { params: Promise<{ slug: st
         <section className="card needs">
           <div className="row" style={{ justifyContent: "space-between" }}><h2>Needs you</h2>{needs.length > 0 && <span className="badge high">{needs.length} item{needs.length > 1 ? "s" : ""}</span>}</div>
           {needs.map((x) => (
-            <Link key={x.t} className="item" href={x.href}>
+            <div key={x.key} className="item">
               <span className="ico"><Icon name={x.icon} /></span>
               <span className="t"><b>{x.t}</b><span className="muted" style={{ fontSize: 13 }}>{x.d}</span></span>
-              <span className="go">{x.go} ›</span>
-            </Link>
+              {x.code ? (
+                <form action={nudgeOrder}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="code" value={x.code} /><button className="btn small act">{x.go}</button></form>
+              ) : <Link className="btn secondary small act" href={x.href!}>{x.go}</Link>}
+            </div>
           ))}
           {needs.length === 0 && <p className="muted">All clear. Nothing is waiting for you.</p>}
         </section>

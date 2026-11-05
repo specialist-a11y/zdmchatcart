@@ -46,7 +46,13 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
   const zdmChosen = items.filter((i) => i.source === "zdm" && i.chosen).length;
   const onCalendar = new Set((used ?? []).flatMap((p) => p.media_ids as string[]));
   const shoots: Shoot[] = (shootRows ?? []) as Shoot[];
+  const zdmIds = (rows ?? []).filter((c: any) => c.source === "zdm").map((c: any) => c.id);
+  const { data: comments } = zdmIds.length
+    ? await supabase.from("clip_comments").select("id, clip_id, author_name, from_staff, kind, body, created_at, resolved_at").in("clip_id", zdmIds).order("created_at")
+    : { data: [] as any[] };
+  const commentsFor = (id: string) => (comments ?? []).filter((x: any) => x.clip_id === id);
   const clips: Clip[] = (rows ?? []).filter((c: any) => c.source === "zdm").map((c: any) => ({
+    comments: commentsFor(c.id),
     id: c.id, shoot_id: c.shoot_id, kind: c.kind, title: c.title, caption: c.caption, seconds: c.seconds, url: url(c.storage_path), thumbUrl: url(c.thumb_path),
     chosen: c.chosen, skipped: c.skipped, scheduled: onCalendar.has(c.id),
   }));

@@ -37,3 +37,13 @@ export async function recentMedia(token: string, igId: string, limit = 12): Prom
   const json: any = await res.json().catch(() => ({}));
   return json?.data ?? [];
 }
+
+/** Send a DM to someone who messaged the shop (inside Instagram's 24-hour window). */
+export const sendIgMessage = (token: string, pageId: string, igsid: string, text: string) =>
+  post(`${pageId}/messages`, token, { recipient: { id: igsid }, messaging_type: "RESPONSE", message: { text } });
+
+/** Name and username of an Instagram user who messaged the shop. */
+export async function igProfile(token: string, igsid: string): Promise<{ name?: string; username?: string }> {
+  const res = await fetch(`https://graph.facebook.com/${ver()}/${igsid}?fields=name,username&access_token=${encodeURIComponent(token)}`).catch(() => null);
+  return res?.ok ? ((await res.json().catch(() => ({}))) as any) : {};
+}

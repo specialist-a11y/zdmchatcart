@@ -3,7 +3,11 @@ import { num } from "@/lib/crm-nav";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { requireMembership } from "@/lib/business";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
+import { connectionHealth } from "@/lib/nightly";
+import type { TokenState } from "@/lib/health";
+import { changeRole, inviteMember, removeMember } from "./team-actions";
+import { cleanHours, hasHours } from "@/lib/hours";
 
 async function requireAdmin(slug: string) {
   const ctx = await requireMembership(slug);
@@ -37,7 +41,7 @@ export default async function SettingsPage({ params, searchParams }: {
     const { business } = await requireAdmin(slug);
     const admin = createAdminClient();
     await admin.from("integration_secrets").delete().eq("business_id", business.id).eq("provider", "instagram");
-    await admin.from("integrations").update({ status: "disconnected" }).eq("business_id", business.id).eq("provider", "instagram");
+    await admin.from("integrations").update({ status: "pending" }).eq("business_id", business.id).eq("provider", "instagram");
     redirect(`${path}?msg=Instagram and Facebook disconnected#social`);
   }
 
@@ -63,12 +67,14 @@ export default async function SettingsPage({ params, searchParams }: {
     "use server";
     const { business } = await requireAdmin(slug);
     const phoneNumberId = String(formData.get("phone_number_id") ?? "").trim();
+    const wabaId = String(formData.get("waba_id") ?? "").trim();
+    if (wabaId && !/^\d+$/.test(wabaId)) redirect(`${path}?msg=Business account ID should be digits only`);
     const token = String(formData.get("access_token") ?? "").trim();
     if (!/^\d+$/.test(phoneNumberId)) redirect(`${path}?msg=Phone number ID should be digits only`);
     const admin = createAdminClient();
     await admin.from("integrations").upsert({
       business_id: business.id, provider: "whatsapp", status: "connected",
-      config: { phone_number_id: phoneNumberId }, updated_at: new Date().toISOString(),
+      config: { phone_number_id: phoneNumberId, ...(wabaId ? { waba_id: wabaId } : {}) }, updated_at: new Date().toISOString(),
     });
     if (token) {
       await admin.from("integration_secrets").upsert({ business_id: business.id, provider: "whatsapp", secret: token, updated_at: new Date().toISOString() });
@@ -76,13 +82,131 @@ export default async function SettingsPage({ params, searchParams }: {
     redirect(`${path}?msg=WhatsApp saved`);
   }
 
+  async function saveNotify(formData: FormData) {
+    "use server";
+    const { business } = await requireAdmin(slug);
+    const { error } = await createAdminClient().from("businesses").update({ daily_summary: formData.get("daily_summary") === "on" }).eq("id", business.id);
+    redirect(`${path}?msg=${encodeURIComponent(error ? "Run supabase/migrations/0015_priority_features.sql first" : "Notifications saved")}#notify`);
+  }
+  const { data: notify } = await supabase.from("businesses").select("daily_summary").eq("id", business.id).maybeSingle();
+
   const cfg = (i?: { config: any }) => (i?.config ?? {}) as Record<string, string>;
+  // Ask Meta whether the saved tokens still work, and when they stop.
+  const health: Record<string, TokenState | null> = hasServiceRoleKey() ? await connectionHealth(createAdminClient(), business.id) : {};
+  const sinceText = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("en-GB", { timeZone: "America/Barbados", day: "numeric", month: "short" }) : null);
+  const [{ data: lastPay }, { data: lastWa }, { data: domain }, { count: productCount }, { data: hb }, { data: members }, { data: subPlan }] = await Promise.all([
+    supabase.from("orders").select("paid_at").eq("business_id", business.id).not("fygaro_transaction_id", "is", null).neq("fygaro_transaction_id", "manual").order("paid_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("messages").select("created_at").eq("business_id", business.id).eq("channel", "whatsapp").eq("direction", "in").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("business_domains").select("domain, status").eq("business_id", business.id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    supabase.from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("active", true),
+    supabase.from("businesses").select("hours").eq("id", business.id).maybeSingle(),
+    supabase.from("business_members").select("user_id, role, created_at").eq("business_id", business.id).order("created_at"),
+    supabase.from("subscriptions").select("plans!subscriptions_plan_id_fkey(seats)").eq("business_id", business.id).maybeSingle<any>(),
+  ]);
+  // Names and emails for the team list (server key only).
+  const people = new Map<string, { email?: string; name?: string }>();
+  if (hasServiceRoleKey() && isAdmin) {
+    const adminDb = createAdminClient();
+    await Promise.all((members ?? []).map(async (m) => {
+      const { data } = await adminDb.auth.admin.getUserById(m.user_id);
+      if (data?.user) people.set(m.user_id, { email: data.user.email ?? undefined, name: data.user.user_metadata?.full_name || data.user.user_metadata?.name });
+    }));
+  }
+  const seats = subPlan?.plans?.seats ?? null;
+  type Check = { name: string; state: "ok" | "warn" | "bad" | "off"; detail: string; fix?: { href: string; label: string } };
+  const st = (k: string) => health[k];
+  const checks: Check[] = [
+    { name: "Payments (Fygaro)", state: fygaro?.status === "connected" ? "ok" : "off",
+      detail: fygaro?.status === "connected" ? (lastPay?.paid_at ? `Working. Last online payment ${sinceText(lastPay.paid_at)}.` : "Connected. No online payments yet.") : "Not set up. ZDMINC connects this for you." },
+    { name: "WhatsApp", state: whatsapp?.status !== "connected" ? "off" : st("whatsapp")?.state === "expired" ? "bad" : st("whatsapp")?.state === "soon" ? "warn" : "ok",
+      detail: whatsapp?.status !== "connected" ? "Not connected." : `${st("whatsapp")?.label ?? "Connected"}.${lastWa?.created_at ? ` Last customer message ${sinceText(lastWa.created_at)}.` : ""}`,
+      fix: st("whatsapp")?.state === "expired" || st("whatsapp")?.state === "soon" ? { href: `/dashboard/${slug}/support?t=new&subject=${encodeURIComponent("WhatsApp needs reconnecting")}`, label: "Ask ZDMINC" } : undefined },
+    { name: "Instagram and Facebook", state: !social ? "off" : st("instagram")?.state === "expired" ? "bad" : st("instagram")?.state === "soon" ? "warn" : "ok",
+      detail: !social ? "Not connected." : `${sc.ig_username ? `@${sc.ig_username}. ` : ""}${st("instagram")?.label ?? "Connected"}.`,
+      fix: !social || st("instagram")?.state === "expired" || st("instagram")?.state === "soon" ? { href: `/api/social/connect?slug=${slug}`, label: social ? "Reconnect" : "Connect" } : undefined },
+    { name: "Your own domain", state: domain?.status === "active" ? "ok" : domain ? "warn" : "off",
+      detail: domain?.status === "active" ? `${domain.domain} is live.` : domain ? `${domain.domain} is waiting for its DNS settings.` : "Optional. Your shop works on the ZDM ChatCart link.",
+      fix: domain?.status === "active" ? undefined : { href: `/dashboard/${slug}/website`, label: domain ? "See settings" : "Add one" } },
+    { name: "Shop basics", state: (productCount ?? 0) > 0 && business.logo_url && hasHours(cleanHours(hb?.hours)) ? "ok" : "warn",
+      detail: [(productCount ?? 0) > 0 ? `${productCount} products live` : "No products yet", business.logo_url ? "logo added" : "no logo", hasHours(cleanHours(hb?.hours)) ? "hours set" : "hours not set"].join(" · "),
+      fix: !(productCount ?? 0) ? { href: `/dashboard/${slug}/products`, label: "Add products" } : !business.logo_url || !hasHours(cleanHours(hb?.hours)) ? { href: `/dashboard/${slug}/business`, label: "Business info" } : undefined },
+  ];
+  const light = { ok: "#2bb673", warn: "#e0a23b", bad: "#d4553a", off: "#c4ccc8" };
 
   return (
     <div className="stack" style={{ maxWidth: 760 }}>
-      <PageHeader n={num("settings")} title="Settings" sub="Instagram and Facebook, WhatsApp, payments and Meta ads tracking." />
+      <PageHeader n={num("settings")} title="Settings" sub="Is everything working, who's on your team, and what we message you about." />
       {msg && <p className="ok">{msg}</p>}
       {!isAdmin && <p className="muted">Only owners and admins can change these settings.</p>}
+
+      <section className="card stack" style={{ gap: 0 }} aria-label="Health checklist">
+        <div className="row" style={{ justifyContent: "space-between", marginBottom: 6 }}>
+          <h2 style={{ fontSize: 22 }}>Health checklist</h2>
+          <span className="muted" style={{ fontSize: 13 }}>{checks.filter((c) => c.state === "ok").length} of {checks.length} green</span>
+        </div>
+        {checks.map((c) => (
+          <div key={c.name} className="row" style={{ borderTop: "1px solid #eef2f1", padding: "10px 0", flexWrap: "nowrap", alignItems: "flex-start" }}>
+            <i aria-hidden="true" style={{ width: 12, height: 12, borderRadius: "50%", background: light[c.state], flex: "none", marginTop: 5 }} />
+            <span style={{ flex: 1, minWidth: 0 }}><b>{c.name}</b><br /><span className="muted" style={{ fontSize: 14 }}>{c.detail}</span></span>
+            {c.fix && <a className={`btn small ${c.state === "bad" ? "coral" : "secondary"}`} href={c.fix.href}>{c.fix.label}</a>}
+          </div>
+        ))}
+        <span className="muted" style={{ fontSize: 13, marginTop: 6 }}>Checked when you open this page and every night. If one goes red we WhatsApp you. Anything you can't fix here, <Link href={`/dashboard/${slug}/support?t=new`}>ask ZDMINC</Link>.</span>
+      </section>
+
+      <section id="team" className="card stack" style={{ gap: 8 }}>
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 22 }}>Team</h2>
+          {seats != null && <span className="muted" style={{ fontSize: 13 }}>{members?.length ?? 0} of {seats} seats used</span>}
+        </div>
+        <span className="muted" style={{ fontSize: 14 }}>Staff can take orders, use the Inbox, and manage customers and products. They can't see billing or change settings. Admins can do everything except remove the owner.</span>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Person</th><th>Role</th><th /></tr></thead>
+            <tbody>
+              {(members ?? []).map((m) => {
+                const p = people.get(m.user_id);
+                return (
+                  <tr key={m.user_id}>
+                    <td>{p?.name ?? p?.email ?? "Team member"}{p?.name && p?.email && <><br /><span className="muted" style={{ fontSize: 13 }}>{p.email}</span></>}</td>
+                    <td>
+                      {role === "owner" && m.role !== "owner" ? (
+                        <form action={changeRole} className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                          <input type="hidden" name="slug" value={slug} /><input type="hidden" name="user_id" value={m.user_id} />
+                          <select name="role" defaultValue={m.role} aria-label="Role" style={{ minWidth: 100 }}><option value="admin">Admin</option><option value="staff">Staff</option></select>
+                          <button className="btn secondary small">Save</button>
+                        </form>
+                      ) : <span className="badge">{m.role}</span>}
+                    </td>
+                    <td>{isAdmin && m.role !== "owner" && (role === "owner" || m.role === "staff") && (
+                      <form action={removeMember}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="user_id" value={m.user_id} /><button className="btn secondary small">Remove</button></form>
+                    )}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {isAdmin && (
+          <form action={inviteMember} className="row" style={{ gap: 8 }}>
+            <input type="hidden" name="slug" value={slug} />
+            <input name="email" type="email" required placeholder="Their email" aria-label="Email to invite" style={{ flex: "1 1 220px" }} />
+            <select name="role" defaultValue="staff" aria-label="Role"><option value="staff">Staff</option>{role === "owner" && <option value="admin">Admin</option>}</select>
+            <button className="btn small" disabled={seats != null && (members?.length ?? 0) >= seats}>Invite</button>
+          </form>
+        )}
+        {seats != null && (members?.length ?? 0) >= seats && <span className="muted" style={{ fontSize: 13 }}>All seats are used. <Link href={`/dashboard/${slug}/billing`}>Upgrade</Link> for more.</span>}
+      </section>
+
+      <form id="notify" action={saveNotify} className="card stack" style={{ gap: 8 }}>
+        <h2 style={{ fontSize: 22 }}>WhatsApp messages to you</h2>
+        <label className="row" style={{ flexDirection: "row", gap: 8, fontWeight: 600 }}>
+          <input type="checkbox" name="daily_summary" defaultChecked={notify?.daily_summary ?? true} disabled={!isAdmin} style={{ width: 20, height: 20 }} />
+          8pm summary: today's sales, unpaid orders and chats waiting
+        </label>
+        <span className="muted" style={{ fontSize: 13 }}>Sent from the ZDMINC WhatsApp number to the owner phone in Business info. Alerts about your ad wallet and connections always go out.</span>
+        {isAdmin && <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>Save</button>}
+      </form>
 
       <p className="card">Business name, logo, hours, address and contact details are in <Link href={`/dashboard/${slug}/business`}>Business info</Link>. Your plan and invoices are in <Link href={`/dashboard/${slug}/billing`}>Plan and billing</Link>.</p>
 
@@ -117,6 +241,10 @@ export default async function SettingsPage({ params, searchParams }: {
         )}
       </section>
 
+      <details id="keys" className="card">
+        <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Connection keys · ZDMINC manages these</summary>
+        <p className="muted" style={{ margin: "6px 0 12px" }}>ZDMINC sets up payments and WhatsApp for you. Only change these if the team asks you to.</p>
+        <div className="stack">
       <form action={saveFygaro} className="card stack">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h2 style={{ fontSize: 22 }}>Fygaro payments</h2>
@@ -132,7 +260,7 @@ export default async function SettingsPage({ params, searchParams }: {
         <button className="btn" disabled={!isAdmin} style={{ alignSelf: "flex-start" }}>Save Fygaro</button>
       </form>
 
-      <form action={saveWhatsApp} className="card stack">
+      <form id="whatsapp" action={saveWhatsApp} className="card stack">
         <div className="row" style={{ justifyContent: "space-between" }}>
           <h2 style={{ fontSize: 22 }}>WhatsApp Cloud API</h2>
           <span className="badge">{whatsapp?.status ?? "not connected"}</span>
@@ -141,9 +269,12 @@ export default async function SettingsPage({ params, searchParams }: {
           From your Meta app: WhatsApp, API Setup. Webhook URL: <code>{site}/api/webhooks/whatsapp</code>, subscribed to <code>messages</code>.
         </p>
         <label>Phone number ID<input name="phone_number_id" required defaultValue={cfg(whatsapp).phone_number_id ?? ""} /></label>
+        <label>WhatsApp business account ID <span className="muted" style={{ fontWeight: 400 }}>(optional, lets template approvals update on their own)</span><input name="waba_id" inputMode="numeric" defaultValue={cfg(whatsapp).waba_id ?? ""} /></label>
         <label>Permanent access token {whatsapp ? "(leave blank to keep the saved one)" : ""}<input name="access_token" type="password" autoComplete="off" required={!whatsapp} /></label>
         <button className="btn" disabled={!isAdmin} style={{ alignSelf: "flex-start" }}>Save WhatsApp</button>
       </form>
+        </div>
+      </details>
     </div>
   );
 }

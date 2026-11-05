@@ -3,7 +3,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { parseInbound, verifyMetaSignature } from "@/lib/whatsapp";
 import { extractOrderCode, needsPrice, orderReply } from "@/lib/order-text";
 import { ensurePaymentLink, sendFromBusiness } from "@/lib/payments";
-import { upsertCustomer } from "@/lib/customers";
+import { setConsent, upsertCustomer } from "@/lib/customers";
+import { consentCommand, startReply, stopReply } from "@/lib/journeys";
+import { awayDue, awayText, cleanHours, matchFaq, openState } from "@/lib/hours";
 import { recordZdmInbound } from "@/lib/zdm-whatsapp";
 
 /** Meta webhook verification handshake. */
@@ -47,6 +49,19 @@ export async function POST(req: Request) {
     const businessId = integ.business_id as string;
 
     const customerId = await upsertCustomer(admin, businessId, msg.from, { name: msg.name, optIn: true });
+
+    // STOP / START: switch marketing off or on, and confirm once.
+    const consent = consentCommand(msg.text);
+    if (consent && customerId) {
+      await admin.from("messages").insert({
+        business_id: businessId, customer_id: customerId, channel: "whatsapp", direction: "in", body: msg.text, external_id: msg.messageId,
+      });
+      if (await setConsent(admin, customerId, consent)) {
+        const { data: biz } = await admin.from("businesses").select("name").eq("id", businessId).single();
+        await sendFromBusiness(admin, businessId, msg.from, consent === "stop" ? stopReply(biz?.name ?? "us") : startReply(biz?.name ?? "us"), { customerId });
+      }
+      continue;
+    }
     const code = extractOrderCode(msg.text);
 
     let orderId: string | null = null;
@@ -104,9 +119,32 @@ export async function POST(req: Request) {
       }
     }
 
+    // Automations (migration 0015): FAQ keyword answers, then the away message when closed.
+    if (!reply && !code) {
+      const { data: faqs } = await admin.from("whatsapp_faqs").select("id, keywords, answer, active, hits").eq("business_id", businessId).eq("active", true);
+      const faq = matchFaq(msg.text, (faqs ?? []) as any);
+      if (faq) {
+        reply = faq.answer;
+        await admin.from("whatsapp_faqs").update({ hits: ((faq as any).hits ?? 0) + 1 }).eq("id", faq.id);
+      }
+    }
+    let biz: any = null;
+    if (!reply && !code) {
+      const { data } = await admin.from("businesses").select("slug, name, hours, away_enabled, away_message, closed_until, closed_note").eq("id", businessId).maybeSingle();
+      biz = data;
+      const state = biz ? openState(cleanHours(biz.hours), { closedUntil: biz.closed_until, closedNote: biz.closed_note }) : null;
+      if (biz?.away_enabled && state && !state.open && customerId) {
+        const { data: c } = await admin.from("customers").select("away_sent_at").eq("id", customerId).maybeSingle();
+        if (awayDue(c?.away_sent_at)) {
+          reply = awayText(biz.away_message, state, biz.name).replace("{shop_link}", `${site}/s/${biz.slug}`);
+          await admin.from("customers").update({ away_sent_at: new Date().toISOString() }).eq("id", customerId);
+        }
+      }
+    }
+
     // Only greet first-time chatters; everything else waits for a human in the inbox.
     if (!reply && !code && (priorInbound ?? 0) === 0) {
-      const { data: biz } = await admin.from("businesses").select("slug").eq("id", businessId).single();
+      if (!biz) biz = (await admin.from("businesses").select("slug").eq("id", businessId).single()).data;
       reply = `Hi${msg.name ? " " + msg.name.split(" ")[0] : ""}! Browse and order here: ${site}/s/${biz?.slug}\nA team member will also reply soon.`;
     }
 

@@ -6,11 +6,11 @@ import { createClient } from "@/lib/supabase/client";
 import { preparePhoto } from "@/lib/media-prep";
 import { displayPrice, PRESETS, readVariants } from "@/lib/catalog";
 import { money } from "@/lib/order-text";
-import { deleteProduct, getProductPhotoUrl, reorder, saveProduct, setActive, type ProductInput } from "./actions";
+import { deleteProduct, getProductPhotoUrl, reorder, saveProduct, setActive, setFeatured, type ProductInput } from "./actions";
 
 export type Item = {
   id: string; kind: "product" | "service"; name: string; description: string | null; category: string | null;
-  price: number; price_note: string | null; stock: number | null; image_url: string | null; active: boolean; variants: unknown;
+  price: number; price_note: string | null; stock: number | null; image_url: string | null; active: boolean; variants: unknown; featured?: boolean;
 };
 
 /** Category ideas per website template, shown as suggestions. */
@@ -163,7 +163,7 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
             <div key={p.id} className={`pe-item${p.active ? "" : " off"}`}>
               <div className="pe-img">{p.image_url ? <img src={p.image_url} alt="" /> : p.name.slice(0, 1)}</div>
               <div className="pe-meta">
-                <b>{p.name}</b>
+                <b>{p.featured && <span style={{ color: "#c98a00" }} aria-label="Featured">★ </span>}{p.name}</b>
                 <small>
                   {p.kind === "service" ? "Service" : "Product"}{p.category ? ` · ${p.category}` : ""} · {amount === 0 ? "Price on request" : `${from ? "from " : ""}${money(amount, currency)}`}{p.price_note ? ` ${p.price_note}` : ""}
                   {p.stock != null ? ` · ${p.stock} in stock` : ""}{p.active ? "" : " · Hidden"}
@@ -175,6 +175,9 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                   <button className="pe-icon" disabled={idx === 0} onClick={() => move(p.id, -1)} aria-label={`Move ${p.name} up`}>↑</button>
                   <button className="pe-icon" disabled={idx === shown.length - 1} onClick={() => move(p.id, 1)} aria-label={`Move ${p.name} down`}>↓</button>
                 </>}
+                <button className="pe-icon" aria-pressed={!!p.featured} title={p.featured ? "Featured: shown first on your website" : "Feature this: show it first"}
+                  aria-label={p.featured ? `Stop featuring ${p.name}` : `Feature ${p.name}`} style={p.featured ? { color: "#c98a00", borderColor: "#f2d9b8", background: "#fff8ec" } : undefined}
+                  onClick={async () => { const r = await setFeatured(slug, p.id, !p.featured); if ("error" in r && r.error) setError(r.error); router.refresh(); }}>{p.featured ? "★" : "☆"}</button>
                 <button className="btn secondary small" onClick={async () => { await setActive(slug, p.id, !p.active); router.refresh(); }}>{p.active ? "Hide" : "Show"}</button>
                 <button className="btn small" onClick={() => { setError(""); setForm(toInput(p)); }}>Edit</button>
               </div>

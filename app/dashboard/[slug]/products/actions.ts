@@ -97,6 +97,16 @@ export async function deleteProduct(slug: string, id: string) {
   return { ok: true };
 }
 
+/** Featured items show first on the website, with a Featured label. */
+export async function setFeatured(slug: string, id: string, featured: boolean) {
+  const { supabase, business } = await requireMembership(slug);
+  const { error } = await db(supabase).from("products").update({ featured }).eq("id", id).eq("business_id", business.id);
+  if (error) return { error: /featured|schema cache/i.test(error.message) ? "Run supabase/migrations/0014_journeys_quickwins.sql to turn on Featured." : error.message };
+  revalidatePath(page(slug));
+  revalidatePath(`/s/${slug}`);
+  return { ok: true };
+}
+
 /** Save the new order after moving items up or down. */
 export async function reorder(slug: string, ids: string[]) {
   const { supabase, business } = await requireMembership(slug);

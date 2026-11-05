@@ -6,7 +6,7 @@ import { SHOP_CSS } from "./shop-css";
 
 type Product = {
   id: string; name: string; description: string | null; price: number; image_url: string | null; stock: number | null;
-  kind?: "product" | "service"; category?: string | null; price_note?: string | null; variants?: unknown;
+  kind?: "product" | "service"; category?: string | null; price_note?: string | null; variants?: unknown; featured?: boolean;
 };
 type Business = {
   name: string; slug: string; tagline: string | null; logo_url: string | null; brand_color: string; currency: string; whatsapp_number: string | null;
@@ -33,7 +33,8 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution, previewTemplate }: {
+export default function ShopClient({ business, products, attribution, previewTemplate, openNow }: {
+  openNow?: { open: boolean; label: string; reason: string } | null;
   business: Business;
   products: Product[];
   attribution: string | null;
@@ -166,9 +167,14 @@ export default function ShopClient({ business, products, attribution, previewTem
   };
 
   // Group by category (in the order they first appear); items without one go first.
+  // Featured items go first: their own "Featured" group when the shop uses categories.
   const groups = useMemo(() => {
+    const featured = products.filter((p) => p.featured);
+    const usesCategories = products.some((p) => p.category?.trim());
+    const rest = usesCategories ? products.filter((p) => !p.featured) : [...featured, ...products.filter((p) => !p.featured)];
     const m = new Map<string, Product[]>();
-    for (const p of products) { const c = p.category?.trim() || ""; m.set(c, [...(m.get(c) ?? []), p]); }
+    if (usesCategories && featured.length) m.set("Featured", featured);
+    for (const p of rest) { const c = p.category?.trim() || ""; m.set(c, [...(m.get(c) ?? []), p]); }
     return [...m.entries()];
   }, [products]);
 
@@ -259,6 +265,15 @@ export default function ShopClient({ business, products, attribution, previewTem
         </header>
       )}
 
+      {openNow && (
+        <div className="s-wrap" style={{ paddingTop: 12, paddingBottom: 0 }}>
+          <div role="status" style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "8px 14px", borderRadius: 999, fontWeight: 700, fontSize: 14,
+            background: openNow.open ? "#e6f7ee" : openNow.reason === "holiday" ? "#fff3e0" : "#f1f2f2", color: openNow.open ? "#146c43" : openNow.reason === "holiday" ? "#8a4b00" : "#4a5c5b" }}>
+            <span aria-hidden="true" style={{ width: 9, height: 9, borderRadius: "50%", background: openNow.open ? "#2bb673" : openNow.reason === "holiday" ? "#e0a23b" : "#9aa7a2" }} />
+            {openNow.label}{!openNow.open && openNow.reason !== "holiday" ? ". You can still order now." : ""}
+          </div>
+        </div>
+      )}
       <main id="items" className="s-wrap s-main">
         {products.length === 0 && <p className="s-empty">Nothing here yet. Check back soon.</p>}
         {groups.map(([cat, items]) => (

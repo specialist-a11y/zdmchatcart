@@ -9,6 +9,8 @@ import { normaliseKeyword } from "@/lib/autoreply";
 import { recentMedia } from "@/lib/instagram";
 import { shortUrl, slugifyCode } from "@/lib/links";
 import { money } from "@/lib/order-text";
+import { debugToken } from "@/lib/meta-token";
+import { tokenState, type TokenState } from "@/lib/health";
 
 const STATUS: Record<string, string> = {
   sent: "Replied + DM", dm_only: "DM only", reply_only: "Reply only", already_sent: "Already sent",
@@ -17,9 +19,9 @@ const STATUS: Record<string, string> = {
 const DEFAULT_DM = "Hi {name}! Here's your link to order: {link}\nAny questions, just reply here.";
 const DEFAULT_REPLIES = "Sent! Check your DMs for the link\nJust sent it to your DMs\nCheck your messages, the link is there";
 
-export default async function AutoRepliesPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
+export default async function AutoRepliesPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string; edit?: string }> }) {
   const { slug } = await params;
-  const { msg } = await searchParams;
+  const { msg, edit } = await searchParams;
   const { supabase, business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
   const path = `/dashboard/${slug}/autoreplies`;
@@ -47,9 +49,11 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
 
   // Recent posts to attach a keyword to (only when connected).
   let media: { id: string; label: string }[] = [];
-  if (connected && canEdit) {
+  let health: TokenState | null = null;
+  if (connected) {
     const { data: sec } = await createAdminClient().from("integration_secrets").select("secret").eq("business_id", business.id).eq("provider", "instagram").maybeSingle();
-    if (sec?.secret && ig?.config?.ig_id) {
+    if (sec?.secret) health = tokenState(await debugToken(sec.secret));
+    if (canEdit && sec?.secret && ig?.config?.ig_id && health?.state !== "expired") {
       media = (await recentMedia(sec.secret, ig.config.ig_id)).map((m) => ({
         id: m.id,
         label: `${m.timestamp ? new Date(m.timestamp).toLocaleDateString("en-GB", { day: "numeric", month: "short" }) + " · " : ""}${(m.caption ?? m.media_type ?? "Post").replace(/\s+/g, " ").slice(0, 60)}`,
@@ -96,6 +100,26 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
     revalidatePath(path);
   }
 
+  async function updateRule(formData: FormData) {
+    "use server";
+    const { business } = await guard();
+    const id = String(formData.get("id"));
+    const keyword = normaliseKeyword(String(formData.get("keyword") ?? ""));
+    if (keyword.length < 2) redirect(`${path}?edit=${id}&msg=${encodeURIComponent("Keyword needs at least 2 letters or numbers, like CAKE")}#edit`);
+    const media = String(formData.get("media") ?? "keep");
+    const [mediaId, ...labelParts] = media.split("|");
+    const replies = String(formData.get("replies") ?? "").split("\n").map((r) => r.trim()).filter(Boolean).slice(0, 6);
+    const cap = Math.min(2000, Math.max(1, Math.round(Number(formData.get("daily_cap")) || 300)));
+    const patch: Record<string, unknown> = {
+      keyword, dm_text: (String(formData.get("dm_text") ?? "").trim() || DEFAULT_DM).slice(0, 900),
+      public_replies: replies.length ? replies : DEFAULT_REPLIES.split("\n"), daily_cap: cap,
+    };
+    if (media !== "keep") Object.assign(patch, { media_id: mediaId || null, media_label: mediaId ? labelParts.join("|").slice(0, 80) : null });
+    const { error } = await createAdminClient().from("ig_autoreplies").update(patch).eq("business_id", business.id).eq("id", id);
+    if (error) redirect(`${path}?edit=${id}&msg=${encodeURIComponent(error.code === "23505" ? `${keyword} already has a rule for that post` : error.message)}#edit`);
+    redirect(`${path}?msg=${encodeURIComponent(`Saved. ${keyword} uses the new wording from the next comment.`)}`);
+  }
+
   async function deleteRule(formData: FormData) {
     "use server";
     const { business } = await guard();
@@ -104,6 +128,7 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
   }
 
   const { data: links } = await supabase.from("short_links").select("id, code, label").eq("business_id", business.id).order("created_at", { ascending: false }).limit(50);
+  const editing = edit ? (rules ?? []).find((r: any) => r.id === edit) as any : null;
   const ruleName = new Map((rules ?? []).map((r: any) => [r.id, r.keyword]));
 
   return (
@@ -111,8 +136,19 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
       <PageHeader n={num("autoreplies")} title="IG auto-replies" sub="Comment CAKE and get the link by DM. We reply to the comment and send the link, automatically." />
       {msg && <p className="ok" style={{ wordBreak: "break-word" }}>{msg}</p>}
 
+      {connected && health && health.state !== "ok" && health.state !== "unknown" && (
+        <div className="card row" role="alert" style={{ justifyContent: "space-between", borderColor: "#f2b8a8", background: "#fdf1ed" }}>
+          <span><b>{health.state === "expired" ? "Instagram has disconnected. Auto-replies are stopped." : `Instagram connection ${health.label.toLowerCase()}.`}</b><br />
+            <span className="muted" style={{ fontSize: 14 }}>{health.state === "expired" ? "Comments are not being answered. Reconnect to turn them back on." : "Reconnect now so auto-replies don't stop."} We also send you a WhatsApp alert when this happens.</span></span>
+          <Link className="btn small coral" href={`/dashboard/${slug}/settings#social`}>Reconnect Instagram</Link>
+        </div>
+      )}
+      {!connected && (rules ?? []).some((r: any) => r.active) && (
+        <p className="error" role="alert" style={{ margin: 0 }}>Instagram isn't connected, so your keywords below are not replying to anyone.</p>
+      )}
+
       <div className="card row" style={{ justifyContent: "space-between" }}>
-        <span className="row"><Dot ok={connected} /><b>{connected ? `Instagram connected${ig?.config?.ig_username ? `: @${ig.config.ig_username}` : ""}` : "Instagram not connected"}</b></span>
+        <span className="row"><Dot ok={connected && health?.state !== "expired"} /><b>{connected ? `Instagram connected${ig?.config?.ig_username ? `: @${ig.config.ig_username}` : ""}` : "Instagram not connected"}</b></span>
         {!connected && <Link className="btn small" href={`/dashboard/${slug}/settings#social`}>Connect Instagram</Link>}
       </div>
 
@@ -148,6 +184,27 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
         </form>
       )}
 
+      {canEdit && editing && (
+        <form id="edit" action={updateRule} className="card stack" style={{ borderColor: "var(--blue)" }}>
+          <input type="hidden" name="id" value={editing.id} />
+          <div className="row" style={{ justifyContent: "space-between" }}><h2>Edit {editing.keyword}</h2><Link href={path}>Cancel</Link></div>
+          <div className="grid">
+            <label>Keyword<input name="keyword" defaultValue={editing.keyword} required maxLength={30} autoCapitalize="characters" /></label>
+            <label>Which post
+              <select name="media" defaultValue="keep">
+                <option value="keep">Keep: {editing.media_id ? editing.media_label ?? "one post" : "every post"}</option>
+                <option value="">Every post and Reel</option>
+                {media.map((m) => <option key={m.id} value={`${m.id}|${m.label}`}>{m.label}</option>)}
+              </select>
+            </label>
+            <label>Most DMs a day<input name="daily_cap" type="number" min={1} max={2000} defaultValue={editing.daily_cap ?? 300} inputMode="numeric" /></label>
+          </div>
+          <label>DM message <span className="muted" style={{ fontWeight: 400 }}>({"{name}"} and {"{link}"} are filled in)</span><textarea name="dm_text" rows={3} defaultValue={editing.dm_text} maxLength={900} /></label>
+          <label>Public replies under the comment <span className="muted" style={{ fontWeight: 400 }}>(one per line, we rotate them)</span><textarea name="replies" rows={3} defaultValue={(editing.public_replies ?? []).join("\n")} /></label>
+          <button className="btn blue" style={{ alignSelf: "flex-start" }}>Save changes</button>
+        </form>
+      )}
+
       <section className="card stack" style={{ gap: 8 }}>
         <h2>Your keywords</h2>
         <div className="table-wrap">
@@ -163,6 +220,7 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
                     <td>{sl ? <code>{shortUrl(sl.code, domain?.domain).replace(/^https?:\/\//, "")}</code> : <span className="muted">shop page</span>}</td>
                     <td>{s.comments}</td><td><b>{s.dms}</b></td><td>{sl?.clicks ?? 0}</td><td><b>{o?.n ?? 0}</b></td><td>{money(o?.v ?? 0, business.currency)}</td>
                     <td>{canEdit && <div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                      <Link className="btn secondary small" href={`?edit=${r.id}#edit`}>Edit</Link>
                       <form action={toggleRule}><input type="hidden" name="id" value={r.id} /><input type="hidden" name="active" value={String(!r.active)} /><button className="btn secondary small">{r.active ? "Pause" : "Turn on"}</button></form>
                       <form action={deleteRule}><input type="hidden" name="id" value={r.id} /><button className="btn secondary small" aria-label={`Delete ${r.keyword}`}>Delete</button></form>
                     </div>}</td>

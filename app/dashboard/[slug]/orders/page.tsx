@@ -4,14 +4,15 @@ import { money } from "@/lib/order-text";
 import { PageHeader, Kpi } from "@/components/CrmShell";
 import { Icon } from "@/components/Icon";
 import { num } from "@/lib/crm-nav";
+import { bulkFulfilled, bulkReady } from "./bulk-actions";
 
 const FILTERS = ["all", "awaiting_confirmation", "awaiting_payment", "paid", "ready", "fulfilled", "abandoned", "cancelled"] as const;
 const LABEL: Record<string, string> = { awaiting_confirmation: "Awaiting confirmation", awaiting_payment: "Awaiting payment", paid: "Paid", ready: "Ready", fulfilled: "Collected", abandoned: "Cart left", cancelled: "Cancelled" };
 const SOURCE: Record<string, [string, string]> = { web: ["Website", "website"], whatsapp: ["WhatsApp", "wa"], instagram: ["Instagram", "ig"], manual: ["Added by hand", "orders"] };
 
-export default async function OrdersPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ status?: string }> }) {
+export default async function OrdersPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ status?: string; msg?: string }> }) {
   const { slug } = await params;
-  const { status = "all" } = await searchParams;
+  const { status = "all", msg } = await searchParams;
   const { supabase, business } = await requireMembership(slug);
 
   let query = supabase.from("orders")
@@ -31,7 +32,8 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
   return (
     <div className="stack">
       <PageHeader n={num("orders")} title="Orders" sub="Every order from the website, WhatsApp and Instagram, with its payment status."
-        actions={<Link className="btn secondary small" href={`/s/${slug}`} target="_blank">View shop</Link>} />
+        actions={<><Link className="btn secondary small" href={`/dashboard/${slug}/orders/slips`}>Packing slips</Link><Link className="btn secondary small" href={`/s/${slug}`} target="_blank">View shop</Link></>} />
+      {msg && <p className={/^Tick|Only/.test(msg) ? "error" : "ok"}>{msg}</p>}
       <div className="kpis">
         <Kpi label="Paid in the last 24 hours" value={money(paidToday, business.currency)} sub={`${today?.length ?? 0} orders`} tone="blue" />
         <Kpi label="Awaiting payment" value={open} sub="Links sent, not paid yet" tone={open ? "amber" : undefined} />
@@ -42,15 +44,23 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
           <Link key={f} href={`?status=${f}`} aria-current={f === status ? "true" : undefined}>{f === "all" ? "All" : LABEL[f]} {n(f) || ""}</Link>
         ))}
       </nav>
+      <form id="bulk" className="card row" style={{ gap: 8, position: "sticky", top: 0, zIndex: 5 }}>
+        <input type="hidden" name="slug" value={slug} />{status !== "all" && <input type="hidden" name="status" value={status} />}
+        <b style={{ marginRight: "auto" }}>With ticked orders:</b>
+        <button className="btn small" formAction={bulkReady}>Mark ready + message</button>
+        <button className="btn secondary small" formAction={bulkFulfilled}>Mark collected</button>
+        <button className="btn secondary small" formAction={`/dashboard/${slug}/orders/slips`} formMethod="get" formTarget="_blank">Print slips</button>
+      </form>
       <div className="table-wrap card" style={{ padding: 0 }}>
         <table>
-          <thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Came in via</th><th>Items</th><th>Total</th><th>Time</th></tr></thead>
+          <thead><tr><th aria-label="Select" /><th>Order</th><th>Customer</th><th>Status</th><th>Came in via</th><th>Items</th><th>Total</th><th>Time</th></tr></thead>
           <tbody>
             {(orders ?? []).map((o: any) => {
               const [src, ico] = SOURCE[o.source] ?? [o.source, "orders"];
               const items = (o.order_items ?? []).reduce((s: number, i: any) => s + i.quantity, 0);
               return (
                 <tr key={o.id}>
+                  <td><input type="checkbox" name="code" value={o.code} form="bulk" aria-label={`Select ${o.code}`} style={{ width: 22, height: 22 }} /></td>
                   <td><Link href={`/dashboard/${slug}/orders/${o.code}`}><strong>{o.code}</strong></Link></td>
                   <td>{o.customers?.name ?? (o.customers?.phone ? `+${o.customers.phone}` : <span className="muted">No phone yet</span>)}</td>
                   <td><span className={`badge ${o.status}`}>{LABEL[o.status] ?? o.status}</span></td>
@@ -63,7 +73,7 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
                 </tr>
               );
             })}
-            {(!orders || orders.length === 0) && <tr><td colSpan={7} className="muted wrap">No orders here yet. Share your shop link to get the first one.</td></tr>}
+            {(!orders || orders.length === 0) && <tr><td colSpan={8} className="muted wrap">No orders here yet. Share your shop link to get the first one.</td></tr>}
           </tbody>
         </table>
       </div>

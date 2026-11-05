@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyMetaSignature } from "@/lib/whatsapp";
-import { fillDm, matchRule, parseComments, pickReply, publicReply, type Rule } from "@/lib/autoreply";
+import { fillDm, matchRule, parseComments, parseIgMessages, pickReply, publicReply, type Rule } from "@/lib/autoreply";
+import { recordIgMessage } from "@/lib/ig-inbox";
 import { privateReply, replyToComment } from "@/lib/instagram";
 import { shortUrl } from "@/lib/links";
 
@@ -17,7 +18,7 @@ export async function GET(req: Request) {
   return new NextResponse("Forbidden", { status: 403 });
 }
 
-/** New Instagram comments: if one matches a client's keyword, reply publicly and DM the link. */
+/** New Instagram comments (keyword auto-replies) and DMs (saved to the Inbox). */
 export async function POST(req: Request) {
   const raw = await req.text();
   const secret = process.env.META_APP_SECRET;
@@ -27,6 +28,9 @@ export async function POST(req: Request) {
   let payload: unknown;
   try { payload = JSON.parse(raw); } catch { return NextResponse.json({ ok: true }); }
   const admin = createAdminClient();
+
+  // Instagram DMs go to the Inbox.
+  for (const m of parseIgMessages(payload)) await recordIgMessage(admin, m).catch(() => null);
 
   for (const c of parseComments(payload)) {
     // Which client owns this Instagram account?

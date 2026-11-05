@@ -1,6 +1,7 @@
 "use server";
 
 import { redirect } from "next/navigation";
+import { revalidatePath } from "next/cache";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { logEvent, notifyClient } from "@/lib/zdm-billing";
@@ -110,4 +111,18 @@ export async function publishShoot(f: FormData) {
     note += res.ok ? " and told the client on WhatsApp" : `. WhatsApp not sent: ${res.error}`;
   }
   redirect(`/admin/videos?client=${shoot!.business_id}&shoot=${shootId}&msg=${encodeURIComponent(note)}`);
+}
+
+/** ZDMINC answers a clip comment, and can mark a change request done. */
+export async function answerClipComment(f: FormData) {
+  const { staff } = await requireStaff();
+  const admin = createAdminClient();
+  const id = String(f.get("id") ?? "");
+  const { data: c } = await admin.from("clip_comments").select("id, clip_id, business_id").eq("id", id).maybeSingle();
+  if (!c) redirect(`/admin/videos?msg=${encodeURIComponent("Comment not found")}`);
+  const body = String(f.get("body") ?? "").trim().slice(0, 2000);
+  if (body) await admin.from("clip_comments").insert({ clip_id: c!.clip_id, business_id: c!.business_id, author_name: staff.name, from_staff: true, kind: "comment", body });
+  if (f.get("done") === "on") await admin.from("clip_comments").update({ resolved_at: new Date().toISOString() }).eq("id", id);
+  revalidatePath("/admin/videos");
+  redirect(`/admin/videos?client=${c!.business_id}&msg=${encodeURIComponent(f.get("done") === "on" ? "Marked done" : "Reply sent")}`);
 }

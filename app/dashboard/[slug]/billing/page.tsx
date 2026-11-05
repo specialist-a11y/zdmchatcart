@@ -4,7 +4,7 @@ import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { money } from "@/lib/staff";
 import { contactOverage, previewChange, todayIn } from "@/lib/billing";
-import { requestPlanChange, saveBillingDetails } from "./actions";
+import { payInvoice, requestPlanChange, saveBillingDetails } from "./actions";
 
 const pct = (a: number, b: number) => (b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0);
 const STATUS: Record<string, string> = { sent: "Due", overdue: "Overdue", paid: "Paid", void: "Cancelled", draft: "Draft" };
@@ -29,6 +29,14 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
     admin.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("chosen", true).gte("chosen_at", monthStart),
   ]);
   const { count: contactCount } = await admin.from("customers").select("id", { count: "exact", head: true }).eq("business_id", business.id);
+  // Everything else used this month, so the plan's value is visible.
+  const { count: chosenImages } = await admin.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("chosen", true).eq("kind", "image").gte("chosen_at", monthStart);
+  const [{ count: posts }, { count: waSent }, { count: igDms }, { count: monthOrders }] = await Promise.all([
+    admin.from("social_posts").select("id", { count: "exact", head: true }).eq("business_id", business.id).neq("status", "cancelled").gte("scheduled_at", monthStart),
+    admin.from("messages").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("channel", "whatsapp").eq("direction", "out").gte("created_at", monthStart),
+    admin.from("ig_comment_events").select("id", { count: "exact", head: true }).eq("business_id", business.id).in("status", ["sent", "dm_only"]).gte("created_at", monthStart),
+    admin.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).gte("created_at", monthStart),
+  ]);
   const current = plans?.find((p) => p.id === sub?.plan_id);
   const pending = plans?.find((p) => p.id === sub?.pending_plan_id);
   const contacts = contactCount ?? 0;
@@ -45,7 +53,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
       {open.length > 0 && (
         <div className="card row" style={{ justifyContent: "space-between", background: open.some((i) => i.status === "overdue") ? "#fbe3dc" : "#fff8ec" }}>
           <span><strong>{open.length === 1 ? `Invoice ${open[0].number} is ${open[0].status === "overdue" ? "overdue" : "due"}` : `${open.length} invoices to pay`}</strong> · {money(open.reduce((n, i) => n + Number(i.amount), 0))}</span>
-          {open[0].payment_url && <a className="btn blue small" href={open[0].payment_url} target="_blank" rel="noreferrer">Pay {open.length === 1 ? "now" : open[0].number} with Fygaro</a>}
+          <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={open[0].number} /><button className="btn blue small">Pay {open.length === 1 ? "now" : open[0].number} with Fygaro</button></form>
         </div>
       )}
 
@@ -57,7 +65,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
               <div><strong style={{ fontSize: 24 }}>{current.name}</strong><br /><span className="muted">{money(current.monthly_price)} a month · renews {sub.current_period_end}</span></div>
               {pending && <p style={{ margin: 0 }}>Moving to <strong>{pending.name}</strong> on {sub.current_period_end}. Pick {current.name} below to cancel that.</p>}
               {Number(sub.credit) > 0 && <p className="ok" style={{ margin: 0 }}>Credit {money(sub.credit)} comes off your next invoice.</p>}
-              {current.video_clips > 0 && <div><div className="row" style={{ justifyContent: "space-between" }}><span>Videos chosen this month</span><strong>{chosen ?? 0} of {current.video_clips}</strong></div><div className="meter"><i style={{ width: `${pct(chosen ?? 0, current.video_clips)}%` }} /></div></div>}
+              {current.video_clips > 0 && <div><div className="row" style={{ justifyContent: "space-between" }}><span>Videos chosen this month</span><strong>{Math.max(0, (chosen ?? 0) - (chosenImages ?? 0))} of {current.video_clips}</strong></div><div className="meter"><i style={{ width: `${pct(Math.max(0, (chosen ?? 0) - (chosenImages ?? 0)), current.video_clips)}%` }} /></div></div>}
               <div>
                 <div className="row" style={{ justifyContent: "space-between" }}><span>Contacts</span><strong>{contacts.toLocaleString("en-US")} of {current.contacts_included.toLocaleString("en-US")} included</strong></div>
                 <div className="meter"><i style={{ width: `${pct(contacts, current.contacts_included)}%`, background: extra?.blocks ? "var(--coral)" : contacts >= current.contacts_included * 0.9 ? "#e0a23b" : undefined }} /></div>
@@ -68,7 +76,18 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
                 ) : null}
               </div>
               <div><div className="row" style={{ justifyContent: "space-between" }}><span>Team seats</span><strong>{seats ?? 0} of {current.seats}</strong></div><div className="meter"><i style={{ width: `${pct(seats ?? 0, current.seats)}%` }} /></div></div>
-              {current.posts_per_month > 0 && <p className="muted" style={{ margin: 0 }}>Includes {current.posts_per_month} AI posts a month.</p>}
+              {Number(current.image_posts ?? 0) > 0 && <div><div className="row" style={{ justifyContent: "space-between" }}><span>Image posts chosen this month</span><strong>{chosenImages ?? 0} of {current.image_posts}</strong></div><div className="meter"><i style={{ width: `${pct(chosenImages ?? 0, current.image_posts)}%` }} /></div></div>}
+              {current.posts_per_month > 0 && <div><div className="row" style={{ justifyContent: "space-between" }}><span>Posts scheduled this month</span><strong>{posts ?? 0} of {current.posts_per_month}</strong></div><div className="meter"><i style={{ width: `${pct(posts ?? 0, current.posts_per_month)}%`, background: (posts ?? 0) >= current.posts_per_month ? "#e0a23b" : undefined }} /></div></div>}
+              <div className="stack" style={{ gap: 4, borderTop: "1px solid #eef2f1", paddingTop: 10 }}>
+                <b style={{ fontSize: 14 }}>Also used this month</b>
+                {[
+                  ["Orders taken", monthOrders ?? 0],
+                  ["WhatsApp messages sent for you", waSent ?? 0],
+                  ["Instagram auto-reply DMs", igDms ?? 0],
+                  ...(current.posts_per_month > 0 ? [] : [["Posts scheduled", posts ?? 0] as const]),
+                ].map(([k, v]) => <div key={k as string} className="row" style={{ justifyContent: "space-between", fontSize: 14 }}><span className="muted">{k}</span><strong>{Number(v).toLocaleString("en-US")}</strong></div>)}
+                <span className="muted" style={{ fontSize: 12 }}>Counted from the 1st of this month.</span>
+              </div>
             </>
           ) : <p className="muted">ZDMINC is setting up your plan.</p>}
         </section>
@@ -123,7 +142,12 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
                 <td>{money(i.amount, i.currency)}</td>
                 <td>{i.due_date}</td>
                 <td><span className={`badge ${i.status}`}>{STATUS[i.status] ?? i.status}{i.paid_at ? ` ${new Date(i.paid_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span></td>
-                <td>{(i.status === "sent" || i.status === "overdue") && i.payment_url && <a className="btn blue small" href={i.payment_url} target="_blank" rel="noreferrer">Pay</a>}</td>
+                <td><div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
+                  {(i.status === "sent" || i.status === "overdue") && (
+                    <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={i.number} /><button className="btn blue small">Pay</button></form>
+                  )}
+                  <a className="btn secondary small" href={`/dashboard/${slug}/billing/invoice/${encodeURIComponent(i.number)}`}>PDF</a>
+                </div></td>
               </tr>
             ))}
             {!invoices?.length && <tr><td colSpan={6} className="muted">No invoices yet.</td></tr>}
