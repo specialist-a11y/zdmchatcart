@@ -15,7 +15,7 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
   const { supabase, business } = await requireMembership(slug);
 
   let query = supabase.from("orders")
-    .select("id, code, status, source, total, currency, created_at, paid_at, attribution, customers(name, phone), order_items(quantity)")
+    .select("id, code, status, source, total, currency, created_at, paid_at, attribution, customers(name, phone), order_items(quantity, unit_price)")
     .eq("business_id", business.id).order("created_at", { ascending: false }).limit(100);
   if (status !== "all") query = query.eq("status", status);
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
@@ -56,7 +56,9 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
                   <td><span className={`badge ${o.status}`}>{LABEL[o.status] ?? o.status}</span></td>
                   <td><span className="row" style={{ gap: 6 }}><Icon name={ico} size={15} />{src}{o.attribution ? <span className="muted">· {o.attribution}</span> : null}</span></td>
                   <td>{items} item{items === 1 ? "" : "s"}</td>
-                  <td>{money(o.total, o.currency)}</td>
+                  <td>{(o.order_items ?? []).some((i: any) => Number(i.unit_price) === 0) && !["paid", "fulfilled", "cancelled"].includes(o.status)
+                    ? <span className="badge high">Price to confirm</span>
+                    : money(o.total, o.currency)}</td>
                   <td className="muted">{new Date(o.created_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</td>
                 </tr>
               );

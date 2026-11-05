@@ -9,6 +9,7 @@ import { num } from "@/lib/crm-nav";
 import { dnsRecord, normaliseDomain, shortUrl, slugifyCode, validCode, validRef } from "@/lib/links";
 import { addDomainToHost, checkDomain, removeDomainFromHost } from "@/lib/domains";
 import { money } from "@/lib/order-text";
+import TemplatePicker from "./TemplatePicker";
 
 export default async function WebsitePage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
@@ -19,10 +20,11 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
   const base = `/dashboard/${slug}`;
   const path = `${base}/website`;
 
-  const [{ count: products }, { data: domains }, { data: links }] = await Promise.all([
+  const [{ count: products }, { data: domains }, { data: links }, { data: look }] = await Promise.all([
     supabase.from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("active", true),
     supabase.from("business_domains").select("id, domain, status, last_error, last_checked_at").eq("business_id", business.id).order("created_at"),
     supabase.from("short_links").select("id, code, label, ref, clicks, last_click_at, created_at").eq("business_id", business.id).order("created_at", { ascending: false }),
+    supabase.from("businesses").select("site_template, hero_image_url").eq("id", business.id).maybeSingle(),
   ]);
   const refs = [...new Set((links ?? []).map((l) => l.ref))];
   const { data: sold } = refs.length
@@ -119,10 +121,13 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
         </section>
         <section className="card stack" style={{ gap: 8 }}>
           <h2>What's on it</h2>
-          <Link href={`${base}/products`}>{products ?? 0} products ›</Link>
+          <Link href={`${base}/products`}>{products ?? 0} products and services ›</Link>
+          <Link href="#look">Website look and template ›</Link>
           <Link href={`${base}/business`}>Name, logo, colour, hours, address and social links ›</Link>
         </section>
       </div>
+
+      <TemplatePicker slug={slug} current={(look as any)?.site_template ?? "classic"} heroUrl={(look as any)?.hero_image_url ?? null} canEdit={canEdit} />
 
       <section id="domain" className="card stack">
         <h2>Your own domain</h2>
@@ -197,9 +202,6 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
         </div>
       </section>
 
-      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
-        <iframe src={`/s/${slug}`} title="Shop preview" style={{ width: "100%", height: 640, border: 0, display: "block" }} />
-      </div>
     </div>
   );
 }

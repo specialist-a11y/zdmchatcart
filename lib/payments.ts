@@ -25,6 +25,7 @@ export async function ensurePaymentLink(admin: Admin, orderId: string): Promise<
     .single();
   if (!order) return null;
   if (order.payment_url) return order.payment_url;
+  if (!(Number(order.total) > 0)) return null;
   const fygaro = await getIntegration(admin, order.business_id, "fygaro");
   if (!fygaro?.config.button_url || !fygaro.config.key_id) return null;
   const url = buildPaymentUrl({

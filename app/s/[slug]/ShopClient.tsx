@@ -1,13 +1,18 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { money } from "@/lib/order-text";
+import { cartKey, displayPrice, readVariants, splitKey, template, type Variant } from "@/lib/catalog";
+import { SHOP_CSS } from "./shop-css";
 
-type Product = { id: string; name: string; description: string | null; price: number; image_url: string | null; stock: number | null };
+type Product = {
+  id: string; name: string; description: string | null; price: number; image_url: string | null; stock: number | null;
+  kind?: "product" | "service"; category?: string | null; price_note?: string | null; variants?: unknown;
+};
 type Business = {
   name: string; slug: string; tagline: string | null; logo_url: string | null; brand_color: string; currency: string; whatsapp_number: string | null;
   description?: string | null; address?: string | null; opening_hours?: string | null; delivery_info?: string | null;
   public_email?: string | null; instagram?: string | null; facebook?: string | null; website_url?: string | null;
-  meta_pixel_id?: string | null;
+  meta_pixel_id?: string | null; site_template?: string | null; hero_image_url?: string | null;
 };
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: unknown } }
@@ -27,14 +32,18 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution }: {
+export default function ShopClient({ business, products, attribution, previewTemplate }: {
   business: Business;
   products: Product[];
   attribution: string | null;
+  previewTemplate?: string | null;
 }) {
+  const t = template(previewTemplate ?? business.site_template);
   const storageKey = `chatcart:${business.slug}`;
   const [cart, setCart] = useState<Record<string, number>>({});
+  const [picks, setPicks] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
+  const [focus, setFocus] = useState<Product | null>(null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [optIn, setOptIn] = useState(false);
@@ -85,26 +94,40 @@ export default function ShopClient({ business, products, attribution }: {
       if (saved) setCart(JSON.parse(saved));
     } catch {}
   }, [storageKey]);
-
   useEffect(() => {
     try { localStorage.setItem(storageKey, JSON.stringify(cart)); } catch {}
   }, [cart, storageKey]);
 
-  const byId = useMemo(() => new Map(products.map((p) => [p.id, p])), [products]);
-  const lines = Object.entries(cart).filter(([id, q]) => q > 0 && byId.has(id));
-  const count = lines.reduce((s, [, q]) => s + q, 0);
-  const total = lines.reduce((s, [id, q]) => s + Number(byId.get(id)!.price) * q, 0);
+  const byId = useMemo(() => new Map(products.map((p) => [p.id, { ...p, opts: readVariants(p.variants) }])), [products]);
 
-  function change(id: string, delta: number) {
-    setCart((c) => {
-      const p = byId.get(id);
-      const max = p?.stock ?? 99;
-      const next = Math.min(max, Math.max(0, (c[id] ?? 0) + delta));
-      return { ...c, [id]: next };
-    });
-    const p = byId.get(id);
-    if (delta > 0 && p) track("AddToCart", { content_ids: [id], content_type: "product", content_name: p.name, value: Number(p.price) });
+  /** A cart line's product, option, name and unit price, or null if it no longer exists. */
+  function line(key: string) {
+    const { productId, variantId } = splitKey(key);
+    const p = byId.get(productId);
+    if (!p) return null;
+    if (p.opts.length) {
+      const v = p.opts.find((x) => x.id === variantId && x.available);
+      return v ? { p, v, name: `${p.name} (${v.name})`, price: v.price } : null;
+    }
+    return variantId ? null : { p, v: null as Variant | null, name: p.name, price: Number(p.price) };
   }
+  const lines = Object.entries(cart).flatMap(([key, q]) => { const l = q > 0 ? line(key) : null; return l ? [{ key, q, ...l }] : []; });
+  const count = lines.reduce((s, l) => s + l.q, 0);
+  const total = lines.reduce((s, l) => s + l.price * l.q, 0);
+  const onRequest = lines.some((l) => l.price === 0);
+  const inCart = (productId: string) => lines.filter((l) => l.p.id === productId).reduce((s, l) => s + l.q, 0);
+
+  function change(key: string, delta: number) {
+    const l = line(key);
+    if (!l) return;
+    setCart((c) => {
+      const others = inCart(l.p.id) - (c[key] ?? 0);
+      const max = l.p.stock == null ? 99 : Math.max(0, l.p.stock - others);
+      return { ...c, [key]: Math.min(max, Math.max(0, (c[key] ?? 0) + delta)) };
+    });
+    if (delta > 0) track("AddToCart", { content_ids: [l.p.id], content_type: "product", content_name: l.name, value: l.price });
+  }
+  const pickFor = (p: { id: string; opts: Variant[] }) => picks[p.id] ?? p.opts.find((v) => v.available)?.id ?? null;
 
   async function checkout() {
     setBusy(true);
@@ -115,7 +138,7 @@ export default function ShopClient({ business, products, attribution }: {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           slug: business.slug,
-          items: lines.map(([productId, quantity]) => ({ productId, quantity })),
+          items: lines.map((l) => ({ productId: l.p.id, ...(l.v ? { variantId: l.v.id } : {}), quantity: l.q })),
           name: name || undefined,
           phone: phone || undefined,
           optIn,
@@ -127,7 +150,7 @@ export default function ShopClient({ business, products, attribution }: {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? "Something went wrong");
       setCart({});
-      track("InitiateCheckout", { value: total, num_items: count, content_ids: lines.map(([id]) => id), content_type: "product" });
+      track("InitiateCheckout", { value: total, num_items: count, content_ids: lines.map((l) => l.p.id), content_type: "product" });
       window.location.href = json.whatsappUrl;
     } catch (e: any) {
       setError(e.message);
@@ -135,61 +158,153 @@ export default function ShopClient({ business, products, attribution }: {
     }
   }
 
-  const accent = business.brand_color;
+  const priceText = (p: Product, v?: Variant | null) => {
+    const { amount, from } = v ? { amount: v.price, from: false } : displayPrice(p);
+    if (amount === 0) return t.id === "trades" ? "Price on quote" : "Price on request";
+    return `${from ? "From " : ""}${money(amount, business.currency)}${p.price_note ? ` ${p.price_note}` : ""}`;
+  };
 
-  return (
-    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <header style={{ background: accent, color: "#fff" }}>
-        <div className="container row" style={{ gap: 16 }}>
-          {business.logo_url && <img src={business.logo_url} alt="" width={56} height={56} style={{ borderRadius: 14, objectFit: "cover", background: "#fff" }} />}
-          <div>
-            <h1 style={{ fontSize: 30 }}>{business.name}</h1>
-            {business.tagline && <p style={{ margin: "4px 0 0", opacity: 0.92 }}>{business.tagline}</p>}
-          </div>
-        </div>
-      </header>
+  // Group by category (in the order they first appear); items without one go first.
+  const groups = useMemo(() => {
+    const m = new Map<string, Product[]>();
+    for (const p of products) { const c = p.category?.trim() || ""; m.set(c, [...(m.get(c) ?? []), p]); }
+    return [...m.entries()];
+  }, [products]);
 
-      <main className="container" style={{ flex: 1 }}>
-        {products.length === 0 ? (
-          <p className="muted">No products yet. Check back soon.</p>
-        ) : (
-          <div className="grid">
-            {products.map((p) => {
-              const q = cart[p.id] ?? 0;
-              const soldOut = p.stock === 0;
-              return (
-                <article key={p.id} className="card product-card stack" style={{ gap: 10 }}>
-                  {p.image_url ? <img src={p.image_url} alt={p.name} /> : <div style={{ aspectRatio: "4 / 3", background: "var(--sand)", borderRadius: 10 }} aria-hidden="true" />}
-                  <h2 style={{ fontSize: 20 }}>{p.name}</h2>
-                  {p.description && <p className="muted" style={{ margin: 0 }}>{p.description}</p>}
-                  <div className="row" style={{ justifyContent: "space-between" }}>
-                    <strong>{money(p.price, business.currency)}</strong>
-                    {soldOut ? (
-                      <span className="badge cancelled">Sold out</span>
-                    ) : q === 0 ? (
-                      <button className="btn small" style={{ background: accent, borderColor: accent }} onClick={() => change(p.id, 1)}>Add</button>
-                    ) : (
-                      <div className="row" style={{ gap: 6 }}>
-                        <button className="btn small secondary" aria-label={`Remove one ${p.name}`} onClick={() => change(p.id, -1)}>-</button>
-                        <span aria-live="polite" style={{ minWidth: 20, textAlign: "center" }}>{q}</span>
-                        <button className="btn small secondary" aria-label={`Add one ${p.name}`} onClick={() => change(p.id, 1)}>+</button>
-                      </div>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
+  const hero = business.hero_image_url || products.find((p) => p.image_url)?.image_url || null;
+  const wa = business.whatsapp_number ? `https://wa.me/${business.whatsapp_number.replace(/\D/g, "")}` : null;
+  const services = products.length > 0 && products.every((p) => p.kind === "service");
+  const heroCta = { classic: "Shop now", caterer: "See the menu", artist: "View the work", beauty: services ? "See services" : "Book now", trades: "See services" }[t.id];
+
+  /** Option chips + add / quantity controls for one item. */
+  function Buy({ p, big }: { p: Product; big?: boolean }) {
+    const item = byId.get(p.id)!;
+    const vid = item.opts.length ? pickFor(item) : null;
+    const key = cartKey(p.id, vid);
+    const q = cart[key] ?? 0;
+    const allOut = item.opts.length > 0 && !item.opts.some((v) => v.available);
+    const soldOut = p.stock === 0 || allOut;
+    return (
+      <div className="s-buy">
+        {item.opts.length > 0 && (
+          <div className="s-opts" role="radiogroup" aria-label={`${p.name} options`}>
+            {item.opts.map((v) => (
+              <button key={v.id} type="button" role="radio" aria-checked={v.id === vid} disabled={!v.available}
+                onClick={(e) => { e.stopPropagation(); setPicks((s) => ({ ...s, [p.id]: v.id })); }}>
+                {v.name}{v.price > 0 && item.opts.some((o) => o.price !== v.price) ? <small> · {money(v.price, business.currency).replace("BBD ", "")}</small> : null}
+              </button>
+            ))}
           </div>
         )}
-        {(business.description || business.address || business.opening_hours || business.delivery_info) && (
-          <section className="card stack" style={{ marginTop: 24 }} aria-label={`About ${business.name}`}>
-            {business.description && <p style={{ margin: 0 }}>{business.description}</p>}
-            <div className="cols">
-              {business.opening_hours && <div><strong>Opening hours</strong><p className="muted" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{business.opening_hours}</p></div>}
-              {business.address && <div><strong>Find us</strong><p className="muted" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{business.address}</p></div>}
-              {business.delivery_info && <div><strong>Pickup and delivery</strong><p className="muted" style={{ margin: "4px 0 0", whiteSpace: "pre-line" }}>{business.delivery_info}</p></div>}
+        <div className="s-buyrow">
+          <strong className="s-price">{priceText(p, item.opts.find((v) => v.id === vid))}</strong>
+          {soldOut ? (
+            <span className="s-out">{p.kind === "service" ? "Unavailable" : "Sold out"}</span>
+          ) : q === 0 ? (
+            <button className={`s-add${big ? " big" : ""}`} onClick={(e) => { e.stopPropagation(); change(key, 1); }}>{t.add}</button>
+          ) : (
+            <div className="s-qty" onClick={(e) => e.stopPropagation()}>
+              <button aria-label={`Remove one ${p.name}`} onClick={() => change(key, -1)}>−</button>
+              <span aria-live="polite">{q}</span>
+              <button aria-label={`Add one ${p.name}`} onClick={() => change(key, 1)}>+</button>
             </div>
-            <div className="row">
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  const Img = ({ p }: { p: Product }) => p.image_url
+    ? <img src={p.image_url} alt={p.name} loading="lazy" />
+    : <div className="s-noimg" aria-hidden="true">{p.name.slice(0, 1)}</div>;
+
+  return (
+    <div className={`shop t-${t.id}`} style={{ ["--accent" as any]: business.brand_color || "#0F7C7E", ...(t.font ? { ["--display" as any]: t.font.family } : {}) }}>
+      {t.font && <link rel="stylesheet" href={t.font.url} precedence="default" />}
+      <style dangerouslySetInnerHTML={{ __html: SHOP_CSS }} />
+
+      {t.id === "classic" ? (
+        <header className="s-bar">
+          <div className="s-wrap s-brand">
+            {business.logo_url && <img src={business.logo_url} alt="" width={56} height={56} />}
+            <div><h1>{business.name}</h1>{business.tagline && <p>{business.tagline}</p>}</div>
+          </div>
+        </header>
+      ) : (
+        <header className="s-hero" style={hero ? { ["--hero" as any]: `url("${hero.replace(/"/g, "%22")}")` } : undefined} data-has-image={hero ? "" : undefined}>
+          <div className="s-wrap s-herotext">
+            {business.logo_url && <img className="s-logo" src={business.logo_url} alt="" width={64} height={64} />}
+            <h1>{business.name}</h1>
+            {business.tagline && <p>{business.tagline}</p>}
+            <div className="s-herocta">
+              <a className="s-btn" href="#items">{heroCta}</a>
+              {t.id === "trades" && wa && <a className="s-btn ghost" href={wa} target="_blank" rel="noreferrer">WhatsApp us</a>}
+            </div>
+            {t.id === "trades" && (business.address || business.opening_hours) && (
+              <ul className="s-trust">
+                {business.address && <li>Serving {business.address.split("\n")[0]}</li>}
+                {business.opening_hours && <li>{business.opening_hours.split("\n")[0]}</li>}
+                {wa && <li>Quotes on WhatsApp</li>}
+              </ul>
+            )}
+          </div>
+        </header>
+      )}
+
+      <main id="items" className="s-wrap s-main">
+        {products.length === 0 && <p className="s-empty">Nothing here yet. Check back soon.</p>}
+        {groups.map(([cat, items]) => (
+          <section key={cat || "_"} className="s-group">
+            {cat && <h2 className="s-cat">{cat}</h2>}
+            {t.layout === "menu" ? (
+              <div className="s-menu">
+                {items.map((p) => (
+                  <article key={p.id} className="s-row">
+                    {p.image_url && <div className="s-thumb"><Img p={p} /></div>}
+                    <div className="s-rowtext">
+                      <div className="s-rowhead"><h3>{p.name}</h3><span className="s-dots" aria-hidden="true" /></div>
+                      {p.description && <p>{p.description}</p>}
+                      <Buy p={p} />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ) : t.layout === "gallery" ? (
+              <div className="s-gallery">
+                {items.map((p) => (
+                  <button key={p.id} type="button" className="s-piece" onClick={() => setFocus(p)} aria-label={`View ${p.name}`}>
+                    <Img p={p} />
+                    <span className="s-caption"><b>{p.name}</b><span>{priceText(p)}</span></span>
+                    {inCart(p.id) > 0 && <span className="s-badge">✓</span>}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="s-grid">
+                {items.map((p) => (
+                  <article key={p.id} className="s-card">
+                    {(t.id === "classic" || p.image_url) && <div className="s-cardimg"><Img p={p} /></div>}
+                    <div className="s-cardbody">
+                      <h3>{p.name}</h3>
+                      {p.description && <p>{p.description}</p>}
+                      <Buy p={p} />
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
+
+        {(business.description || business.address || business.opening_hours || business.delivery_info) && (
+          <section className="s-about" aria-label={`About ${business.name}`}>
+            {business.description && <p className="s-desc">{business.description}</p>}
+            <div className="s-facts">
+              {business.opening_hours && <div><strong>{t.id === "beauty" ? "Opening hours" : "Hours"}</strong><p>{business.opening_hours}</p></div>}
+              {business.address && <div><strong>{t.id === "trades" ? "Areas we cover" : "Find us"}</strong><p>{business.address}</p></div>}
+              {business.delivery_info && <div><strong>{t.id === "caterer" ? "Pickup, delivery and events" : "Pickup and delivery"}</strong><p>{business.delivery_info}</p></div>}
+            </div>
+            <div className="s-links">
               {business.instagram && <a href={`https://instagram.com/${handle(business.instagram)}`} target="_blank" rel="noreferrer">Instagram</a>}
               {business.facebook && <a href={`https://facebook.com/${handle(business.facebook)}`} target="_blank" rel="noreferrer">Facebook</a>}
               {business.website_url && /^https?:\/\//.test(business.website_url) && <a href={business.website_url} target="_blank" rel="noreferrer">Website</a>}
@@ -199,44 +314,72 @@ export default function ShopClient({ business, products, attribution }: {
         )}
       </main>
 
+      {focus && (
+        <div className="s-modal" role="dialog" aria-modal="true" aria-label={focus.name} onClick={() => setFocus(null)}>
+          <div className="s-modalbox" onClick={(e) => e.stopPropagation()}>
+            <button className="s-close" onClick={() => setFocus(null)} aria-label="Close">✕</button>
+            {focus.image_url && <img src={focus.image_url} alt={focus.name} />}
+            <div className="s-modaltext">
+              <h3>{focus.name}</h3>
+              {focus.description && <p>{focus.description}</p>}
+              <Buy p={focus} big />
+            </div>
+          </div>
+        </div>
+      )}
+
       {count > 0 && (
-        <div className="cart-bar">
-          <div className="container">
+        <div className="s-cart">
+          <div className="s-wrap">
             {!open ? (
-              <>
-                <span><strong>{count} item{count > 1 ? "s" : ""}</strong> · {money(total, business.currency)}</span>
-                <button className="btn coral" onClick={() => setOpen(true)}>Order on WhatsApp</button>
-              </>
+              <div className="s-cartbar">
+                <span><strong>{count} {count > 1 ? "items" : "item"}</strong> · {money(total, business.currency)}{onRequest ? " + quote" : ""}</span>
+                <button className="s-btn" onClick={() => setOpen(true)}>{t.cta}</button>
+              </div>
             ) : (
-              <div className="stack" style={{ width: "100%", gap: 12 }}>
-                <div className="row" style={{ justifyContent: "space-between" }}>
-                  <strong>Your order · {money(total, business.currency)}</strong>
-                  <button className="btn small secondary" onClick={() => setOpen(false)}>Back</button>
+              <div className="s-checkout">
+                <div className="s-cartbar">
+                  <strong>Your {t.id === "beauty" ? "booking" : t.id === "trades" ? "quote request" : t.id === "artist" ? "enquiry" : "order"}</strong>
+                  <button className="s-btn ghost small" onClick={() => setOpen(false)}>Back</button>
                 </div>
-                <div className="row" style={{ alignItems: "flex-end" }}>
-                  <label style={{ color: "#fff", flex: "1 1 180px" }}>Name (optional)<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
-                  <label style={{ color: "#fff", flex: "1 1 180px" }}>WhatsApp number (optional)<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" /></label>
+                <ul className="s-lines">
+                  {lines.map((l) => (
+                    <li key={l.key}>
+                      <span>{l.name}</span>
+                      <span className="s-qty small">
+                        <button aria-label={`Remove one ${l.name}`} onClick={() => change(l.key, -1)}>−</button>
+                        <span>{l.q}</span>
+                        <button aria-label={`Add one ${l.name}`} onClick={() => change(l.key, 1)}>+</button>
+                      </span>
+                      <b>{l.price ? money(l.price * l.q, business.currency) : "On request"}</b>
+                    </li>
+                  ))}
+                  <li className="s-total"><span>Total</span><span /><b>{money(total, business.currency)}{onRequest ? " + quote" : ""}</b></li>
+                </ul>
+                <div className="s-fields">
+                  <label>Name (optional)<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
+                  <label>WhatsApp number (optional)<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" /></label>
                 </div>
-                <label style={{ color: "#fff", flexDirection: "row", alignItems: "center", fontWeight: 400 }}>
+                <label className="s-check">
                   <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} />
                   Save my cart and send me a WhatsApp reminder if I don&apos;t finish
                 </label>
-                <label style={{ color: "#fff", flexDirection: "row", alignItems: "center", fontWeight: 400 }}>
+                <label className="s-check">
                   <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} />
                   Send me {business.name}&apos;s offers, and show me its ads
                 </label>
-                <button className="btn coral" disabled={busy || !business.whatsapp_number} onClick={checkout}>
-                  {busy ? "Opening WhatsApp..." : "Send order on WhatsApp"}
+                <button className="s-btn" disabled={busy || !business.whatsapp_number} onClick={checkout}>
+                  {busy ? "Opening WhatsApp..." : `Send on WhatsApp`}
                 </button>
-                {!business.whatsapp_number && <p style={{ margin: 0 }}>This shop has not added its WhatsApp number yet.</p>}
-                {error && <p style={{ margin: 0, color: "#ffd2c7", fontWeight: 600 }}>{error}</p>}
+                {!business.whatsapp_number && <p style={{ margin: 0 }}>This business has not added its WhatsApp number yet.</p>}
+                {error && <p className="s-err">{error}</p>}
               </div>
             )}
           </div>
         </div>
       )}
       {pixel && consent === "unknown" && (
-        <div role="dialog" aria-label="Cookies" style={{ position: "fixed", left: 16, right: 16, bottom: count > 0 ? 96 : 16, zIndex: 20, maxWidth: 560, margin: "0 auto", background: "#fff", color: "var(--ink)", border: "1.5px solid var(--line)", borderRadius: 16, padding: 16, boxShadow: "0 12px 30px rgba(0,0,0,.15)", display: "flex", flexDirection: "column", gap: 10 }}>
+        <div role="dialog" aria-label="Cookies" className="s-consent" style={{ bottom: count > 0 ? 96 : 16 }}>
           <span>{business.name} uses Meta cookies to measure its ads and show you relevant offers on Instagram and Facebook. Is that OK?</span>
           <div className="row"><button className="btn small" onClick={() => choose("yes")}>That's fine</button><button className="btn small secondary" onClick={() => choose("no")}>No thanks</button></div>
         </div>

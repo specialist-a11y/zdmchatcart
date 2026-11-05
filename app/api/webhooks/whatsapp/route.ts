@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { parseInbound, verifyMetaSignature } from "@/lib/whatsapp";
-import { extractOrderCode, orderSummary } from "@/lib/order-text";
+import { extractOrderCode, needsPrice, orderReply } from "@/lib/order-text";
 import { ensurePaymentLink, sendFromBusiness } from "@/lib/payments";
 import { upsertCustomer } from "@/lib/customers";
 import { recordZdmInbound } from "@/lib/zdm-whatsapp";
@@ -53,12 +53,11 @@ export async function POST(req: Request) {
     let reply: string | null = null;
 
     if (code) {
-      const { data: order } = await admin
-        .from("orders")
-        .select("id, code, status, total, currency, customer_id, order_items(name, unit_price, quantity)")
-        .eq("business_id", businessId)
-        .eq("code", code)
-        .maybeSingle<any>();
+      // products(kind) tells bookings from orders; fall back without it if the join isn't available.
+      const find = (items: string) => admin.from("orders").select(`id, code, status, total, currency, customer_id, order_items(${items})`)
+        .eq("business_id", businessId).eq("code", code).maybeSingle<any>();
+      let { data: order, error: findErr } = await find("name, unit_price, quantity, products(kind)");
+      if (findErr) order = (await find("name, unit_price, quantity")).data;
       if (order) {
         orderId = order.id;
         if (!order.customer_id && customerId) {
@@ -70,11 +69,14 @@ export async function POST(req: Request) {
         } else if (["cancelled", "fulfilled"].includes(order.status)) {
           reply = `Order ${order.code} is ${order.status}. Reply here if you need help.`;
         } else {
-          const url = await ensurePaymentLink(admin, order.id);
-          const summary = orderSummary(order.code, order.order_items, order.total, order.currency);
-          reply = url
-            ? `Thanks! Here's your order:\n${summary}\n\nPay securely here: ${url}\n\nReply PICKUP or DELIVERY so we know how to get it to you.`
-            : `Thanks! Here's your order:\n${summary}\n\nWe'll send your payment link shortly.`;
+          const items = order.order_items ?? [];
+          // Price-on-request items: the owner sets the price first, then sends the link from the order page.
+          const url = needsPrice(items) ? null : await ensurePaymentLink(admin, order.id);
+          reply = orderReply({
+            code: order.code, items, total: order.total, currency: order.currency, paymentUrl: url,
+            hasProducts: items.some((i: any) => i.products?.kind !== "service"),
+            anyServices: items.some((i: any) => i.products?.kind === "service"),
+          });
         }
       }
     }

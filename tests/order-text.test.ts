@@ -73,3 +73,30 @@ test("receipt links are signed per order", () => {
   assert.equal(checkReceiptToken("3f0c2a1e-1111-4222-8333-444455556667", receiptToken(id)), false);
   assert.equal(checkReceiptToken(id, ""), false);
 });
+
+import { needsPrice, orderReply } from "../lib/order-text.ts";
+
+const quoteItems = [{ name: "Leak repair (Call-out)", unit_price: 0, quantity: 1 }];
+const mixed = [{ name: "Black cake (8 inch)", unit_price: 65, quantity: 1 }, { name: "Wedding cake", unit_price: 0, quantity: 1 }];
+
+test("price-on-request items show as to confirm", () => {
+  assert.ok(needsPrice(quoteItems));
+  assert.equal(needsPrice([{ unit_price: "12.50" }]), false);
+  assert.equal(orderSummary("TR-1", quoteItems, 0, "BBD"), "Order TR-1\n• 1 x Leak repair (Call-out): price to confirm\nTotal: to confirm");
+  assert.match(orderSummary("CC-2", mixed, 65, "BBD"), /Total so far: BBD \$65\.00, plus the items to confirm$/);
+});
+
+test("WhatsApp reply: no payment link while prices are to confirm", () => {
+  const r = orderReply({ code: "TR-1", items: quoteItems, total: 0, currency: "BBD", paymentUrl: "https://pay", hasProducts: false, anyServices: true });
+  assert.doesNotMatch(r, /https:\/\/pay|PICKUP/);
+  assert.match(r, /confirm the price/);
+});
+
+test("WhatsApp reply: pickup question only for products", () => {
+  const items = [{ name: "Gel nails", unit_price: 60, quantity: 1 }];
+  const booking = orderReply({ code: "BK-1", items, total: 60, currency: "BBD", paymentUrl: "https://pay", hasProducts: false, anyServices: true });
+  assert.match(booking, /your booking/);
+  assert.doesNotMatch(booking, /PICKUP/);
+  const order = orderReply({ code: "CC-1", items, total: 60, currency: "BBD", paymentUrl: null, hasProducts: true, anyServices: false });
+  assert.match(order, /your order[\s\S]*payment link shortly[\s\S]*PICKUP/);
+});
