@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { checkPost, finalStatus, igCrop, postShape } from "../lib/posts.ts";
+import { checkPost, finalStatus, frameFor, igCrop, postShape } from "../lib/posts.ts";
 
 const now = new Date("2026-11-04T12:00:00Z");
 const later = new Date("2026-11-05T12:00:00Z");
@@ -39,4 +39,18 @@ test("Instagram crop keeps 4:5 to 1.91:1", () => {
   assert.deepEqual(igCrop(1080, 1920), { x: 0, y: 285, w: 1080, h: 1350 });
   const wide = igCrop(3000, 1000);
   assert.equal(wide.h, 1000); assert.equal(wide.w, 1910); assert.equal(wide.x, 545);
+});
+
+test("9:16 photos can't go to the Instagram feed", () => {
+  const tall = 1080 / 1920;
+  assert.match(checkPost({ kinds: ["image"], ratios: [tall], platforms: ["instagram"], caption: "", when: later, now })!, /taller than 4:5/);
+  assert.equal(checkPost({ kinds: ["image"], ratios: [tall], platforms: ["facebook"], caption: "", when: later, now }), null);
+  assert.equal(checkPost({ kinds: ["video"], ratios: [tall], platforms: ["instagram"], caption: "", when: later, now }), null);
+  assert.equal(checkPost({ kinds: ["image"], ratios: [0.8], platforms: ["instagram"], caption: "", when: later, now }), null);
+});
+
+test("crop frames for horizontal media", () => {
+  assert.deepEqual(frameFor(1920, 1080, 4 / 5), { x: 528, y: 0, w: 864, h: 1080 });
+  assert.deepEqual(frameFor(1920, 1080, 9 / 16), { x: 656, y: 0, w: 608, h: 1080 });
+  assert.deepEqual(frameFor(1000, 2000, 4 / 5), { x: 0, y: 375, w: 1000, h: 1250 });
 });

@@ -15,24 +15,29 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
     admin.from("subscriptions").select("business_id, plan:plans!subscriptions_plan_id_fkey(name, video_clips), businesses(name)").neq("status", "cancelled"),
     admin.from("video_shoots").select("id, business_id, month, shoot_date, published_at, video_clips(id, chosen)").gte("month", `${thisMonth}-01`).order("month"),
   ]);
-  const videoClients = (clients ?? []).filter((c: any) => c.plan?.video_clips > 0).sort((a: any, b: any) => a.businesses.name.localeCompare(b.businesses.name));
+  // Every active client: ZDMINC can add photos and videos for anyone, not only video plans.
+  const videoClients = (clients ?? []).filter((c: any) => c.businesses).sort((a: any, b: any) => a.businesses.name.localeCompare(b.businesses.name));
   const clientId = sp.client ?? (videoClients[0] as any)?.business_id;
   const { data: shoots } = clientId ? await admin.from("video_shoots").select("*").eq("business_id", clientId).order("month", { ascending: false }).limit(12) : { data: [] as any[] };
-  const shoot = (shoots ?? []).find((s) => s.id === sp.shoot) ?? shoots?.[0];
-  const { data: clips } = shoot ? await admin.from("video_clips").select("*").eq("shoot_id", shoot.id).order("created_at") : { data: [] as any[] };
+  const extras = sp.shoot === "extras" || !shoots?.length;
+  const shoot = extras ? null : (shoots ?? []).find((s) => s.id === sp.shoot) ?? shoots?.[0];
+  const { data: clips } = shoot
+    ? await admin.from("video_clips").select("*").eq("shoot_id", shoot.id).order("created_at")
+    : clientId ? await admin.from("video_clips").select("*").eq("business_id", clientId).eq("source", "zdm").is("shoot_id", null).order("created_at", { ascending: false }).limit(100) : { data: [] as any[] };
   // Short-lived links so the team can preview without making the bucket public.
-  const signed = clips?.length ? (await admin.storage.from("client-videos").createSignedUrls(clips.map((c) => c.storage_path), 3600)).data ?? [] : [];
-  const urlFor = (p: string) => signed.find((s) => s.path === p)?.signedUrl ?? undefined;
+  const paths = (clips ?? []).flatMap((c) => [c.storage_path, ...(c.thumb_path ? [c.thumb_path] : [])]);
+  const signed = paths.length ? (await admin.storage.from("client-videos").createSignedUrls(paths, 3600)).data ?? [] : [];
+  const urlFor = (p: string | null) => (p ? signed.find((s) => s.path === p)?.signedUrl ?? undefined : undefined);
   const client: any = videoClients.find((c: any) => c.business_id === clientId);
 
   return (
     <>
-      <PageHeader n={adminNum("/admin/videos")} title="Video uploads" sub="Upload each client's finished clips and photos. They pick or schedule them from their Content library, and their picks show here." />
+      <PageHeader n={adminNum("/admin/videos")} title="Content uploads" sub="Add photos and videos to any client's Content library, from a shoot or as extras. AI writes the captions; clients pick or schedule them, and their picks show here." />
       {sp.msg && <p className="ok">{sp.msg}</p>}
 
       <div className="card table-wrap" style={{ padding: 0 }}>
         <table>
-          <thead><tr><th>Client with a video plan</th><th>This month's shoot</th><th>Clips</th><th>Chosen</th><th>Status</th><th /></tr></thead>
+          <thead><tr><th>Client</th><th>This month's shoot</th><th>Clips</th><th>Chosen</th><th>Status</th><th /></tr></thead>
           <tbody>
             {videoClients.map((c: any) => {
               const s = (allShoots ?? []).find((x: any) => x.business_id === c.business_id);
@@ -40,16 +45,16 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
               const chosen = s?.video_clips?.filter((v: any) => v.chosen).length ?? 0;
               return (
                 <tr key={c.business_id} style={c.business_id === clientId ? { background: "var(--teal-soft)" } : undefined}>
-                  <td><strong>{c.businesses.name}</strong><br /><span className="muted">{c.plan.name}</span></td>
+                  <td><strong>{c.businesses.name}</strong><br /><span className="muted">{c.plan?.name}</span></td>
                   <td>{s?.shoot_date ?? (s ? "date not set" : <span className="muted">none yet</span>)}</td>
-                  <td>{n} of {c.plan.video_clips}</td>
+                  <td>{c.plan?.video_clips > 0 ? `${n} of ${c.plan.video_clips}` : n || "—"}</td>
                   <td>{chosen}</td>
-                  <td><span className={`badge ${s?.published_at ? "paid" : s ? "sent" : "high"}`}>{s?.published_at ? "Delivered" : s ? "In progress" : "Not booked"}</span></td>
+                  <td>{c.plan?.video_clips > 0 ? <span className={`badge ${s?.published_at ? "paid" : s ? "sent" : "high"}`}>{s?.published_at ? "Delivered" : s ? "In progress" : "Not booked"}</span> : <span className="muted">No shoot plan</span>}</td>
                   <td><Link href={`/admin/videos?client=${c.business_id}`}>Open ›</Link></td>
                 </tr>
               );
             })}
-            {videoClients.length === 0 && <tr><td colSpan={6} className="muted">No clients on a video plan yet.</td></tr>}
+            {videoClients.length === 0 && <tr><td colSpan={6} className="muted">No active clients yet.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -59,18 +64,22 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
           <div className="stack">
             <div className="row" style={{ justifyContent: "space-between" }}>
               <h2>{client?.businesses?.name}</h2>
-              <div className="row">{(shoots ?? []).map((s) => <Link key={s.id} href={`/admin/videos?client=${clientId}&shoot=${s.id}`} className={`badge ${s.id === shoot?.id ? "paid" : ""}`}>{new Date(`${s.month}T12:00:00Z`).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}</Link>)}</div>
+              <div className="row">
+                {(shoots ?? []).map((s) => <Link key={s.id} href={`/admin/videos?client=${clientId}&shoot=${s.id}`} className={`badge ${s.id === shoot?.id ? "paid" : ""}`}>{new Date(`${s.month}T12:00:00Z`).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}</Link>)}
+                <Link href={`/admin/videos?client=${clientId}&shoot=extras`} className={`badge ${extras ? "paid" : ""}`}>Extras</Link>
+              </div>
             </div>
-            {shoot ? (
+            {extras && <p className="muted" style={{ margin: 0 }}>Extras go straight into the client's library (no shoot needed): product photos, event shots, extra clips.</p>}
+            {shoot || extras ? (
               <>
-                <Uploader shootId={shoot.id} />
+                <Uploader key={shoot?.id ?? "extras"} target={shoot ? { shootId: shoot.id } : { businessId: clientId }} hint={shoot ? undefined : "Photos or videos, added to their library right away."} />
                 <div className="grid">
                   {(clips ?? []).map((c) => (
                     <form key={c.id} action={updateClip} className="card stack" style={{ padding: 12 }}>
                       <input type="hidden" name="id" value={c.id} />
                       {urlFor(c.storage_path) ? (c.kind === "image"
                         ? <img src={urlFor(c.storage_path)} alt={c.title} style={{ width: "100%", aspectRatio: "4 / 5", objectFit: "cover", borderRadius: 10, background: "#000" }} />
-                        : <video src={urlFor(c.storage_path)} controls preload="metadata" style={{ width: "100%", aspectRatio: "9 / 16", objectFit: "cover", borderRadius: 10, background: "#000" }} />) : null}
+                        : <video src={urlFor(c.storage_path)} poster={urlFor(c.thumb_path)} controls preload="metadata" style={{ width: "100%", aspectRatio: "9 / 16", objectFit: "cover", borderRadius: 10, background: "#000" }} />) : null}
                       <div className="row" style={{ justifyContent: "space-between" }}>
                         <span className={`badge ${c.status === "published" ? "paid" : c.status === "hidden" ? "resolved" : "sent"}`}>{c.status}</span>
                         {c.chosen && <span className="badge paid">Client chose this</span>}
@@ -84,7 +93,7 @@ export default async function VideosAdmin({ searchParams }: { searchParams: Prom
                     </form>
                   ))}
                 </div>
-                {!clips?.length && <p className="muted">No clips in this shoot yet.</p>}
+                {!clips?.length && <p className="muted">{extras ? "No extras yet." : "No clips in this shoot yet."}</p>}
               </>
             ) : <p className="muted">No shoots yet. Add one on the right.</p>}
           </div>

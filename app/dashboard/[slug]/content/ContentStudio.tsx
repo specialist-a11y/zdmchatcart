@@ -3,17 +3,19 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { duration, toInstagramJpeg } from "@/lib/media-prep";
+import { preparePhoto, readMedia, videoThumb } from "@/lib/media-prep";
 import { checkPost, MAX_CAPTION, MAX_ITEMS, postShape, type MediaKind, type Platform } from "@/lib/posts";
-import { deleteContent, getContentUploadUrl, registerContent, schedulePost, toggleClip } from "./actions";
+import { deleteContent, getContentUploadUrl, registerContent, schedulePost, suggestCaption, toggleClip } from "./actions";
+import CropDialog, { type CropChoice } from "./CropDialog";
 
 export type LibraryItem = {
   id: string; kind: MediaKind; source: "zdm" | "client"; title: string; caption: string | null;
-  url?: string; seconds: number | null; chosen: boolean; label: string;
+  url?: string; thumbUrl?: string; ratio: number | null; seconds: number | null; chosen: boolean; label: string;
 };
 export type Connection = { connected: boolean; igUsername: string | null; hasIg: boolean; pageName: string | null };
 
-type Upload = { name: string; state: "waiting" | "uploading" | "done" | "failed"; error?: string };
+type Upload = { name: string; state: "waiting" | "uploading" | "cropping" | "done" | "failed" | "skipped"; error?: string };
+type CropAsk = { file: File; kind: MediaKind; width: number; height: number; index: number; total: number; resolve: (c: CropChoice | null) => void };
 type Filter = "all" | "image" | "video" | "zdm" | "client";
 
 const CSS = `
@@ -44,6 +46,12 @@ const CSS = `
 .cs-plat label:has(input:checked) { border-color: var(--blue); background: var(--teal-soft); }
 .cs-plat label:has(input:disabled) { opacity: .5; cursor: not-allowed; }
 .cs-count { font-size: 12px; color: var(--muted); text-align: right; }
+.cs-eye { position: absolute; bottom: 8px; right: 8px; width: 34px; height: 34px; border-radius: 50%; border: 0; background: rgba(255,255,255,.92); display: grid; place-items: center; cursor: pointer; box-shadow: 0 3px 10px rgba(0,0,0,.25); }
+.cs-light { position: fixed; inset: 0; z-index: 90; background: rgba(11,15,14,.85); display: grid; place-items: center; padding: 20px; }
+.cs-light video, .cs-light img { max-width: min(92vw, 720px); max-height: 82vh; border-radius: 12px; background: #000; }
+.cs-light button { position: absolute; top: 16px; right: 16px; }
+.cs-ai { display: inline-flex; align-items: center; gap: 6px; border: 1.5px solid var(--blue); color: var(--teal); background: var(--teal-soft); border-radius: 999px; padding: 4px 12px; font-weight: 700; font-size: 13px; cursor: pointer; }
+.cs-ai:disabled { opacity: .6; cursor: wait; }
 @media (max-width: 900px) { .cs-composer { grid-template-columns: 1fr; bottom: 0; border-radius: 18px 18px 0 0; } .cs-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 `;
 
@@ -58,7 +66,7 @@ function Media({ item, autoPlay }: { item: LibraryItem; autoPlay?: boolean }) {
   if (!item.url) return null;
   return item.kind === "image"
     ? <img src={item.url} alt={item.title} loading="lazy" />
-    : <video src={item.url} muted loop playsInline preload="metadata" autoPlay={autoPlay}
+    : <video src={item.url} poster={item.thumbUrl} muted loop playsInline preload="metadata" autoPlay={autoPlay}
         onMouseEnter={(e) => e.currentTarget.play().catch(() => {})} onMouseLeave={(e) => e.currentTarget.pause()} />;
 }
 
@@ -69,6 +77,9 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [over, setOver] = useState(false);
   const [busyUpload, setBusyUpload] = useState(false);
+  const [cropAsk, setCropAsk] = useState<CropAsk | null>(null);
+  const [preview, setPreview] = useState<LibraryItem | null>(null);
+  const [writing, setWriting] = useState(false);
 
   const [selected, setSelected] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
@@ -84,26 +95,60 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
   const shape = kinds.length ? postShape(kinds) : null;
   const fbMix = platforms.includes("facebook") && kinds.length > 1 && kinds.includes("video");
 
+  /** Ask the client how to crop a wide photo or video. Resolves null if they skip the file. */
+  const askCrop = (a: Omit<CropAsk, "resolve">) => new Promise<CropChoice | null>((resolve) => setCropAsk({ ...a, resolve }));
+
+  async function sendFile(file: File) {
+    const signed = await getContentUploadUrl(slug, file.name);
+    if ("error" in signed) throw new Error(signed.error);
+    const { error } = await createClient().storage.from("client-videos").uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type });
+    if (error) throw new Error(error.message);
+    return signed.path;
+  }
+
   async function upload(files: FileList | File[]) {
     const list = [...files].filter((f) => f.type.startsWith("video/") || f.type.startsWith("image/"));
     if (!list.length) return;
     const start = uploads.length;
     setUploads((prev) => [...prev, ...list.map((f) => ({ name: f.name, state: "waiting" as const }))]);
     setBusyUpload(true);
-    const supabase = createClient();
+    const wide = await Promise.all(list.map((f) => readMedia(f).catch(() => null)));
     for (let i = 0; i < list.length; i++) {
       const set = (patch: Partial<Upload>) => setUploads((prev) => prev.map((u, j) => (j === start + i ? { ...u, ...patch } : u)));
-      set({ state: "uploading" });
+      const original = list[i];
+      const title = original.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
       try {
-        const kind: MediaKind = list[i].type.startsWith("image/") ? "image" : "video";
-        const file = kind === "image" ? await toInstagramJpeg(list[i]) : list[i];
-        const signed = await getContentUploadUrl(slug, file.name);
-        if ("error" in signed) throw new Error(signed.error);
-        const { error } = await supabase.storage.from("client-videos").uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type });
-        if (error) throw new Error(error.message);
-        const secs = kind === "video" ? await duration(file) : null;
-        const res = await registerContent(slug, signed.path, list[i].name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "), kind, secs);
-        if ("error" in res && res.error) throw new Error(res.error);
+        const kind: MediaKind = original.type.startsWith("image/") ? "image" : "video";
+        const info = wide[i];
+        if (!info) throw new Error(kind === "image" ? "Couldn't read this photo" : "Couldn't read this video");
+        // Horizontal: let them pick 4:5 or 9:16 and where the frame sits.
+        let choice: CropChoice | null = { ratio: "original", rect: null };
+        if (info.width > info.height) {
+          choice = await askCrop({ file: original, kind, width: info.width, height: info.height, index: i, total: list.length });
+          setCropAsk(null);
+          if (!choice) { set({ state: "skipped" }); continue; }
+        }
+        set({ state: "uploading" });
+        if (kind === "image") {
+          const photo = await preparePhoto(original, choice.rect);
+          const path = await sendFile(photo.file);
+          const res = await registerContent(slug, { path, title, kind, seconds: null, width: photo.width, height: photo.height, thumbPath: null });
+          if ("error" in res && res.error) throw new Error(res.error);
+        } else {
+          const thumb = await videoThumb(original, choice.rect);
+          const thumbPath = thumb ? await sendFile(thumb).catch(() => null) : null;
+          let path = await sendFile(original);
+          let width = info.width, height = info.height;
+          if (choice.rect) {
+            set({ state: "cropping" });
+            const r = await fetch("/api/content/crop", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ slug, path, rect: choice.rect }) });
+            const j = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(j.error ?? "Couldn't crop the video");
+            path = j.path; width = j.width; height = j.height;
+          }
+          const res = await registerContent(slug, { path, title, kind, seconds: info.seconds, width, height, thumbPath });
+          if ("error" in res && res.error) throw new Error(res.error);
+        }
         set({ state: "done" });
       } catch (e: any) {
         set({ state: "failed", error: e?.message ?? "Upload failed" });
@@ -113,14 +158,30 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
     router.refresh();
   }
 
+  async function writeCaption(ids = selected) {
+    if (!ids.length) return;
+    setWriting(true);
+    const res = await suggestCaption(slug, ids);
+    setWriting(false);
+    if ("caption" in res && res.caption) setCaption(res.caption);
+    else if ("error" in res) setMsg({ error: res.error });
+  }
+
   function toggle(id: string) {
     setMsg({});
-    setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length >= MAX_ITEMS ? s : [...s, id]));
+    const next = selected.includes(id) ? selected.filter((x) => x !== id) : selected.length >= MAX_ITEMS ? selected : [...selected, id];
+    setSelected(next);
+    // First item picked and no caption yet: start from the item's own caption, or have the AI write one.
+    if (selected.length === 0 && next.length === 1 && !caption.trim()) {
+      const own = byId.get(id)?.caption;
+      if (own) setCaption(own);
+      else void writeCaption(next);
+    }
   }
 
   async function submit(now: boolean) {
     const at = now ? new Date() : new Date(when);
-    const problem = checkPost({ kinds, platforms, caption, when: at });
+    const problem = checkPost({ kinds, ratios: chosen.map((c) => c.ratio), platforms, caption, when: at });
     if (problem) return setMsg({ error: problem });
     setSending(true);
     setMsg({});
@@ -160,7 +221,7 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
           {uploads.map((u, i) => (
             <div key={i} className="row" style={{ justifyContent: "space-between" }}>
               <strong style={{ fontSize: 14 }}>{u.name}</strong>
-              <span className={`badge ${u.state === "done" ? "paid" : u.state === "failed" ? "failed" : "sent"}`}>{u.state === "failed" ? u.error : u.state}</span>
+              <span className={`badge ${u.state === "done" ? "paid" : u.state === "failed" ? "failed" : "sent"}`}>{u.state === "failed" ? u.error : u.state === "cropping" ? "cropping video…" : u.state === "uploading" ? "uploading…" : u.state}</span>
             </div>
           ))}
         </div>
@@ -182,11 +243,18 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
           const n = selected.indexOf(it.id);
           return (
             <div key={it.id} className={`cs-card${n >= 0 ? " sel" : ""}`}>
-              <button type="button" className="cs-media" onClick={() => canPost && toggle(it.id)} aria-pressed={n >= 0} aria-label={`${n >= 0 ? "Remove" : "Add"} ${it.title} ${n >= 0 ? "from" : "to"} post`}>
-                <Media item={it} />
-                {canPost && <span className="cs-pick">{n >= 0 ? n + 1 : ""}</span>}
-                <span className="cs-tag">{it.kind === "video" ? `▶ ${it.seconds ? `${it.seconds}s` : "Video"}` : "Photo"}</span>
-              </button>
+              <div style={{ position: "relative" }}>
+                <button type="button" className="cs-media" onClick={() => (canPost ? toggle(it.id) : setPreview(it))} aria-pressed={n >= 0} aria-label={`${n >= 0 ? "Remove" : "Add"} ${it.title} ${n >= 0 ? "from" : "to"} post`}>
+                  <Media item={it} />
+                  {canPost && <span className="cs-pick">{n >= 0 ? n + 1 : ""}</span>}
+                  <span className="cs-tag">{it.kind === "video" ? `▶ ${it.seconds ? `${it.seconds}s` : "Video"}` : "Photo"}</span>
+                </button>
+                <button type="button" className="cs-eye" onClick={() => setPreview(it)} aria-label={`${it.kind === "video" ? "Play" : "View"} ${it.title}`} title={it.kind === "video" ? "Play with sound" : "View"}>
+                  {it.kind === "video"
+                    ? <svg width="14" height="14" viewBox="0 0 24 24" fill="#0b0f0e"><path d="M7 4v16l13-8z" /></svg>
+                    : <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0b0f0e" strokeWidth="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7" /></svg>}
+                </button>
+              </div>
               <div className="cs-body">
                 <b title={it.title}>{it.title}</b>
                 <span className="muted">{it.label}</span>
@@ -215,11 +283,13 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
                 <button key={c.id} type="button" onClick={() => toggle(c.id)} title="Remove"><Media item={c} /><span>✕</span></button>
               ))}
             </div>
-            <label>
-              Caption
-              <textarea rows={4} value={caption} maxLength={MAX_CAPTION} onChange={(e) => setCaption(e.target.value)}
-                placeholder={"Fresh coconut drops are back 🥥\nOrder on WhatsApp, link in bio.\n#barbados #bakery"} />
-            </label>
+            <div className="row" style={{ justifyContent: "space-between" }}>
+              <label htmlFor="cs-caption" style={{ margin: 0 }}>Caption</label>
+              <button type="button" className="cs-ai" disabled={writing} onClick={() => writeCaption()}>✨ {writing ? "Writing…" : caption.trim() ? "Rewrite with AI" : "Write with AI"}</button>
+            </div>
+            <textarea id="cs-caption" rows={5} value={caption} maxLength={MAX_CAPTION} disabled={writing}
+              onChange={(e) => setCaption(e.target.value)}
+              placeholder={writing ? "Writing a caption from your photos…" : "Fresh coconut drops are back 🥥\nOrder on WhatsApp, link in bio.\n#barbados #bakery"} />
             <span className="cs-count">{caption.length} / {MAX_CAPTION}</span>
           </div>
 
@@ -258,6 +328,17 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
             {msg.error && <p className="error" role="alert" style={{ margin: 0 }}>{msg.error}</p>}
           </div>
         </section>
+      )}
+
+      {cropAsk && <CropDialog key={cropAsk.index} {...cropAsk} onDone={(c) => cropAsk.resolve(c)} />}
+
+      {preview?.url && (
+        <div className="cs-light" role="dialog" aria-modal="true" aria-label={preview.title} onClick={() => setPreview(null)}>
+          <button type="button" className="btn secondary small" onClick={() => setPreview(null)}>Close ✕</button>
+          {preview.kind === "video"
+            ? <video src={preview.url} poster={preview.thumbUrl} controls autoPlay playsInline onClick={(e) => e.stopPropagation()} />
+            : <img src={preview.url} alt={preview.title} onClick={(e) => e.stopPropagation()} />}
+        </div>
       )}
     </div>
   );

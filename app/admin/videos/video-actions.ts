@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { requireStaff } from "@/lib/staff";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { logEvent, notifyClient } from "@/lib/zdm-billing";
+import { after } from "next/server";
+import { autoCaption, captionsEnabled } from "@/lib/captions";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const safeName = (n: string) => n.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "clip.mp4";
@@ -23,31 +25,49 @@ export async function createShoot(f: FormData) {
   redirect(`/admin/videos?client=${businessId}&shoot=${shoot!.id}`);
 }
 
+/** Where an upload goes: into a shoot, or straight into a client's library (photos, extra clips). */
+export type Target = { shootId: string } | { businessId: string };
+
+async function resolveTarget(admin: ReturnType<typeof db>, t: Target) {
+  if ("shootId" in t) {
+    const { data: shoot } = await admin.from("video_shoots").select("id, business_id, published_at").eq("id", t.shootId).maybeSingle();
+    return shoot ? { businessId: shoot.business_id as string, shootId: shoot.id as string, folder: `${shoot.business_id}/${shoot.id}/`, published: Boolean(shoot.published_at) } : null;
+  }
+  const { data: b } = await admin.from("businesses").select("id").eq("id", t.businessId).maybeSingle();
+  return b ? { businessId: b.id as string, shootId: null, folder: `${b.id}/zdm/`, published: true } : null;
+}
+
 /** Step 1 of an upload: a one-time signed URL so the browser sends the file straight to storage. */
-export async function getUploadUrl(shootId: string, fileName: string) {
+export async function getUploadUrl(target: Target, fileName: string) {
   const { supabase } = await requireStaff();
   const admin = db(supabase);
-  const { data: shoot } = await admin.from("video_shoots").select("id, business_id").eq("id", shootId).single();
-  if (!shoot) return { error: "Shoot not found" };
-  const path = `${shoot.business_id}/${shoot.id}/${Date.now()}-${safeName(fileName)}`;
+  const t = await resolveTarget(admin, target);
+  if (!t) return { error: "Client or shoot not found" };
+  const path = `${t.folder}${Date.now()}-${safeName(fileName)}`;
   const { data, error } = await admin.storage.from("client-videos").createSignedUploadUrl(path);
   if (error || !data) return { error: error?.message ?? "Could not start upload" };
   return { path, token: data.token };
 }
 
-/** Step 2: record the clip once the file is in storage. */
-export async function registerClip(shootId: string, path: string, title: string, seconds: number | null, kind: "video" | "image" = "video") {
+/** Step 2: record the item once the file is in storage. Captions are written by AI in the background. */
+export async function registerClip(target: Target, input: {
+  path: string; title: string; kind: "video" | "image"; seconds: number | null; width: number | null; height: number | null; thumbPath: string | null;
+}) {
   const { supabase } = await requireStaff();
   const admin = db(supabase);
-  const { data: shoot } = await admin.from("video_shoots").select("id, business_id, published_at").eq("id", shootId).single();
-  if (!shoot || !path.startsWith(`${shoot.business_id}/${shoot.id}/`)) return { error: "Bad upload path" };
-  const { error } = await admin.from("video_clips").insert({
-    business_id: shoot.business_id, shoot_id: shoot.id, storage_path: path, title: title.slice(0, 120) || "Clip",
-    seconds: kind === "video" && seconds && seconds > 0 ? Math.min(600, Math.round(seconds)) : null,
-    kind: kind === "image" ? "image" : "video", source: "zdm",
-    status: shoot.published_at ? "published" : "ready",
-  });
-  return error ? { error: error.message } : { ok: true };
+  const t = await resolveTarget(admin, target);
+  if (!t || !input.path.startsWith(t.folder) || (input.thumbPath && !input.thumbPath.startsWith(t.folder))) return { error: "Bad upload path" };
+  const n = (v: number | null) => (v && v > 0 ? Math.round(v) : null);
+  const { data, error } = await admin.from("video_clips").insert({
+    business_id: t.businessId, shoot_id: t.shootId, storage_path: input.path, title: input.title.slice(0, 120) || "Clip",
+    seconds: input.kind === "video" && input.seconds && input.seconds > 0 ? Math.min(600, Math.round(input.seconds)) : null,
+    kind: input.kind === "image" ? "image" : "video", source: "zdm",
+    width: n(input.width), height: n(input.height), thumb_path: input.thumbPath,
+    status: t.published ? "published" : "ready",
+  }).select("id").single();
+  if (error) return { error: error.message };
+  if (captionsEnabled()) after(() => autoCaption(admin, [data.id]));
+  return { ok: true };
 }
 
 export async function updateClip(f: FormData) {
@@ -58,18 +78,18 @@ export async function updateClip(f: FormData) {
   const patch: Record<string, unknown> = { title: str(f, "title") || "Clip", caption: str(f, "caption") || null };
   if (["ready", "published", "hidden"].includes(status)) patch.status = status;
   const { data } = await admin.from("video_clips").update(patch).eq("id", id).select("business_id, shoot_id").single();
-  redirect(`/admin/videos?client=${data?.business_id}&shoot=${data?.shoot_id}&msg=Saved`);
+  redirect(`/admin/videos?client=${data?.business_id}&shoot=${data?.shoot_id ?? "extras"}&msg=Saved`);
 }
 
 export async function deleteClip(f: FormData) {
   const { supabase } = await requireStaff();
   const admin = db(supabase);
-  const { data: clip } = await admin.from("video_clips").select("id, business_id, shoot_id, storage_path").eq("id", str(f, "id")).single();
+  const { data: clip } = await admin.from("video_clips").select("id, business_id, shoot_id, storage_path, thumb_path").eq("id", str(f, "id")).single();
   if (clip) {
-    await admin.storage.from("client-videos").remove([clip.storage_path]);
+    await admin.storage.from("client-videos").remove([clip.storage_path, ...(clip.thumb_path ? [clip.thumb_path] : [])]);
     await admin.from("video_clips").delete().eq("id", clip.id);
   }
-  redirect(`/admin/videos?client=${clip?.business_id}&shoot=${clip?.shoot_id}&msg=Deleted`);
+  redirect(`/admin/videos?client=${clip?.business_id}&shoot=${clip?.shoot_id ?? "extras"}&msg=Deleted`);
 }
 
 export async function publishShoot(f: FormData) {

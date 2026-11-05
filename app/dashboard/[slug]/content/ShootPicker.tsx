@@ -1,15 +1,17 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Platform } from "@/lib/posts";
-import { decideClip, sendChosenToCalendar } from "./actions";
+import { captionClip, decideClip, sendChosenToCalendar } from "./actions";
 import type { Connection } from "./ContentStudio";
 
 export type Shoot = { id: string; month: string; shoot_date: string | null };
+/** Items ZDMINC added straight to the library (no shoot) are grouped under this id. */
+export const EXTRAS = "extras";
 export type Clip = {
-  id: string; shoot_id: string | null; title: string; caption: string | null; seconds: number | null;
-  url?: string; chosen: boolean; skipped: boolean; scheduled: boolean;
+  id: string; shoot_id: string | null; kind: "video" | "image"; title: string; caption: string | null; seconds: number | null;
+  url?: string; thumbUrl?: string; chosen: boolean; skipped: boolean; scheduled: boolean;
 };
 
 const CSS = `
@@ -24,7 +26,10 @@ const CSS = `
 .sp-card.use { border: 2px solid var(--teal); box-shadow: 0 0 0 3px rgba(61,139,255,.15); }
 .sp-card.skip { opacity: .72; }
 .sp-media { position: relative; aspect-ratio: 16 / 10; overflow: hidden; }
-.sp-media video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sp-media video, .sp-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.sp-media video[data-playing] { object-fit: contain; background: #000; }
+.sp-write { align-self: flex-start; border: 1.5px solid var(--blue); color: var(--teal); background: var(--teal-soft); border-radius: 999px; padding: 3px 10px; font-weight: 700; font-size: 12px; cursor: pointer; margin-bottom: 8px; }
+.sp-write:disabled { opacity: .6; cursor: wait; }
 .sp-chip { position: absolute; top: 8px; padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 800; }
 .sp-chip.len { left: 8px; background: rgba(11,15,14,.85); color: #fff; }
 .sp-chip.state { right: 8px; background: #fff; color: var(--ink); }
@@ -48,16 +53,20 @@ const CSS = `
 
 const FALLBACK = ["#4a2c22", "#c4914f", "#1b6e6a", "#e2b86a", "#b5682a", "#7e2a1e", "#2f4440", "#d4906c"];
 const bucket = (s: number | null): number | null => (s == null ? null : s <= 10 ? 6 : s <= 20 ? 15 : s <= 45 ? 30 : 60);
-const monthName = (m: string) => new Date(`${m}T12:00:00Z`).toLocaleDateString("en-GB", { month: "long" });
+const monthName = (m: string) => (m === EXTRAS ? "Extras" : new Date(`${m}T12:00:00Z`).toLocaleDateString("en-GB", { month: "long" }));
 const pad = (n: number) => String(n).padStart(2, "0");
 function tomorrowTen() {
   const d = new Date(Date.now() + 864e5);
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T10:00`;
 }
 
-export default function ShootPicker({ slug, shoots, clips: initial, conn, canPost }: { slug: string; shoots: Shoot[]; clips: Clip[]; conn: Connection; canPost: boolean }) {
+export default function ShootPicker({ slug, shoots: realShoots, clips: initial, conn, canPost }: { slug: string; shoots: Shoot[]; clips: Clip[]; conn: Connection; canPost: boolean }) {
   const router = useRouter();
   const [clips, setClips] = useState(initial);
+  // Photos and videos ZDMINC added outside a shoot show under "Extras".
+  const shoots = useMemo(() => [...realShoots, ...(initial.some((c) => !c.shoot_id) ? [{ id: EXTRAS, month: EXTRAS, shoot_date: null }] : [])], [realShoots, initial]);
+  const videoRefs = useRef(new Map<string, HTMLVideoElement>());
+  const [writing, setWriting] = useState<string | null>(null);
   const [shootId, setShootId] = useState(shoots[0]?.id ?? null);
   const [len, setLen] = useState<number | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
@@ -69,7 +78,7 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
   const [msg, setMsg] = useState<{ ok?: string; error?: string }>({});
 
   const shoot = shoots.find((s) => s.id === shootId) ?? null;
-  const inShoot = clips.filter((c) => c.shoot_id === shootId);
+  const inShoot = clips.filter((c) => (c.shoot_id ?? EXTRAS) === shootId);
   const lengths = useMemo(() => [...new Set(inShoot.map((c) => bucket(c.seconds)).filter((b): b is number => b != null))].sort((a, b) => a - b), [inShoot]);
   const shown = inShoot.filter((c) => len == null || bucket(c.seconds) === len);
   const chosen = inShoot.filter((c) => c.chosen);
@@ -79,6 +88,22 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
     const next = (d === "use" && c.chosen) || (d === "skip" && c.skipped) ? "new" : d;
     setClips((all) => all.map((x) => (x.id === c.id ? { ...x, chosen: next === "use", skipped: next === "skip" } : x)));
     await decideClip(slug, c.id, next);
+  }
+
+  /** Play with sound: start playback inside the click itself, which browsers require for audio. */
+  function play(c: Clip) {
+    const v = videoRefs.current.get(c.id);
+    videoRefs.current.forEach((other, id) => { if (id !== c.id) other.pause(); });
+    setPlaying(c.id);
+    if (v) { v.muted = false; v.controls = true; v.currentTime = 0; v.play().catch(() => {}); }
+  }
+
+  async function writeFor(c: Clip) {
+    setWriting(c.id);
+    const res = await captionClip(slug, c.id);
+    setWriting(null);
+    if ("caption" in res && res.caption) setClips((all) => all.map((x) => (x.id === c.id ? { ...x, caption: res.caption! } : x)));
+    else if ("error" in res) setMsg({ error: res.error });
   }
 
   async function send() {
@@ -103,10 +128,10 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
 
       <div className="row" style={{ justifyContent: "space-between", alignItems: "flex-end" }}>
         <div>
-          <h2 style={{ fontSize: 30 }}>{shoot ? `${monthName(shoot.month)} videos` : "Videos"}</h2>
+          <h2 style={{ fontSize: 30 }}>{shoot ? (shoot.id === EXTRAS ? "Extras from ZDMINC" : `${monthName(shoot.month)} ${inShoot.some((c) => c.kind === "image") ? "content" : "videos"}`) : "Videos"}</h2>
           <p className="muted" style={{ margin: "4px 0 0", fontSize: 14 }}>
             {shoot?.shoot_date ? `Filmed ${new Date(`${shoot.shoot_date}T12:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long" })} by ZDMINC · ` : "By ZDMINC · "}
-            {inShoot.length} video{inShoot.length === 1 ? "" : "s"} ready · choose the ones you want posted
+            {inShoot.length} {inShoot.every((c) => c.kind === "video") ? `video${inShoot.length === 1 ? "" : "s"}` : `item${inShoot.length === 1 ? "" : "s"}`} ready · choose the ones you want posted
           </p>
         </div>
         <div className="row">
@@ -121,7 +146,7 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
 
       {calOpen && (
         <div className="sp-cal">
-          <div style={{ flexBasis: "100%" }}><b>Add {toSend.length} video{toSend.length > 1 ? "s" : ""} to the calendar.</b> <span className="muted" style={{ fontSize: 13 }}>Each one becomes its own post with the caption ZDMINC wrote. You can cancel any post later.</span></div>
+          <div style={{ flexBasis: "100%" }}><b>Add {toSend.length} video{toSend.length > 1 ? "s" : ""} to the calendar.</b> <span className="muted" style={{ fontSize: 13 }}>Each one becomes its own post with its caption (any without one get an AI caption). You can cancel any post later.</span></div>
           <label>First post<input type="datetime-local" value={start} onChange={(e) => setStart(e.target.value)} /></label>
           <label>Then one every
             <select value={every} onChange={(e) => setEvery(Number(e.target.value))}>
@@ -130,7 +155,7 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
           </label>
           {conn.connected ? (
             <div className="row" style={{ gap: 14, paddingBottom: 10 }}>
-              <label className="plat"><input type="checkbox" disabled={!conn.hasIg} checked={platforms.includes("instagram")} onChange={(e) => setPlatforms((p) => (e.target.checked ? [...p, "instagram"] : p.filter((x) => x !== "instagram")))} /> Instagram Reels</label>
+              <label className="plat"><input type="checkbox" disabled={!conn.hasIg} checked={platforms.includes("instagram")} onChange={(e) => setPlatforms((p) => (e.target.checked ? [...p, "instagram"] : p.filter((x) => x !== "instagram")))} /> Instagram</label>
               <label className="plat"><input type="checkbox" checked={platforms.includes("facebook")} onChange={(e) => setPlatforms((p) => (e.target.checked ? [...p, "facebook"] : p.filter((x) => x !== "facebook")))} /> Facebook</label>
             </div>
           ) : <p className="error" style={{ margin: 0 }}>Connect Instagram and Facebook in <a href={`/dashboard/${slug}/settings#social`}>Settings</a> first.</p>}
@@ -157,14 +182,18 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
           return (
             <article key={c.id} className={`sp-card${c.chosen ? " use" : c.skipped ? " skip" : ""}`}>
               <div className="sp-media" style={{ background: FALLBACK[i % FALLBACK.length] }}>
-                {c.url && (
-                  <video src={playing === c.id ? c.url : `${c.url}#t=0.1`} preload="metadata" playsInline controls={playing === c.id}
-                    autoPlay={playing === c.id} onEnded={() => setPlaying(null)} />
+                {c.url && c.kind === "image" && <img src={c.url} alt={c.title} loading="lazy" />}
+                {c.url && c.kind === "video" && (
+                  <video ref={(el) => { if (el) videoRefs.current.set(c.id, el); else videoRefs.current.delete(c.id); }}
+                    src={c.thumbUrl ? c.url : `${c.url}#t=0.1`} poster={c.thumbUrl} preload="metadata" playsInline
+                    data-playing={playing === c.id ? "" : undefined}
+                    onPause={(e) => { if (e.currentTarget.ended) setPlaying(null); }} onEnded={() => setPlaying(null)} />
                 )}
                 {c.seconds && playing !== c.id && <span className="sp-chip len">{c.seconds}s</span>}
+                {c.kind === "image" && <span className="sp-chip len">Photo</span>}
                 {playing !== c.id && <span className={`sp-chip state${c.scheduled ? " sched" : ""}`}>{state}</span>}
-                {c.url && playing !== c.id && (
-                  <button type="button" className="sp-play" aria-label={`Play ${c.title}`} onClick={() => setPlaying(c.id)}>
+                {c.url && c.kind === "video" && playing !== c.id && (
+                  <button type="button" className="sp-play" aria-label={`Play ${c.title} with sound`} onClick={() => play(c)}>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="#0b0f0e"><path d="M7 4v16l13-8z" /></svg>
                   </button>
                 )}
@@ -172,6 +201,11 @@ export default function ShootPicker({ slug, shoots, clips: initial, conn, canPos
               <div className="sp-body">
                 <b>{c.title}</b>
                 <p>{c.caption || <span className="muted">No caption yet</span>}</p>
+                {canPost && !c.scheduled && (
+                  <button type="button" className="sp-write" disabled={writing === c.id} onClick={() => writeFor(c)}>
+                    ✨ {writing === c.id ? "Writing…" : c.caption ? "Rewrite caption" : "Write caption"}
+                  </button>
+                )}
                 <div className="sp-btns">
                   <button type="button" className={`u${c.chosen ? " on" : ""}`} disabled={c.scheduled} aria-pressed={c.chosen} onClick={() => decide(c, "use")}>{c.scheduled ? "Scheduled" : "Use"}</button>
                   <button type="button" className={`s${c.skipped ? " on" : ""}`} disabled={c.scheduled} aria-pressed={c.skipped} onClick={() => decide(c, "skip")}>Skip</button>

@@ -10,7 +10,7 @@ export const MAX_CAPTION = 2200;
 export const MAX_HASHTAGS = 30;
 
 /** Returns a plain-English problem with the post, or null if it can be scheduled. */
-export function checkPost(p: { kinds: MediaKind[]; platforms: Platform[]; caption: string; when: Date; now?: Date }): string | null {
+export function checkPost(p: { kinds: MediaKind[]; platforms: Platform[]; caption: string; when: Date; now?: Date; ratios?: (number | null)[] }): string | null {
   const now = p.now ?? new Date();
   if (!p.kinds.length) return "Pick at least one photo or video.";
   if (p.kinds.length > MAX_ITEMS) return `A post can have up to ${MAX_ITEMS} photos and videos.`;
@@ -24,7 +24,19 @@ export function checkPost(p: { kinds: MediaKind[]; platforms: Platform[]; captio
   const videos = p.kinds.filter((k) => k === "video").length;
   if (p.platforms.includes("facebook") && videos > 0 && p.kinds.length > 1)
     return "Facebook can't mix a video with other items in one post. Post the video on its own, or untick Facebook.";
+  if (p.platforms.includes("instagram") && p.kinds.some((k, i) => k === "image" && (p.ratios?.[i] ?? 1) < 0.79))
+    return "Instagram feed photos can't be taller than 4:5, and this has a 9:16 photo. Untick Instagram, or use a 4:5 version.";
   return null;
+}
+
+/** Width ÷ height, or null when unknown. */
+export const ratioOf = (w?: number | null, h?: number | null) => (w && h ? w / h : null);
+
+/** The crop frame for a target ratio (width ÷ height), as large as fits, centred. */
+export function frameFor(w: number, h: number, ratio: number) {
+  const fw = w / h > ratio ? Math.round(h * ratio) : w;
+  const fh = w / h > ratio ? h : Math.round(w / ratio);
+  return { x: Math.round((w - fw) / 2), y: Math.round((h - fh) / 2), w: fw, h: fh };
 }
 
 /** What kind of post each platform will get. */

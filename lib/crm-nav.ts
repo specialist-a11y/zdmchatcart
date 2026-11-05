@@ -9,7 +9,7 @@ export const num = (key: string) => CLIENT_NAV.findIndex(([k]) => k === key) + 1
 
 export const ADMIN_NAV = [
   ["/admin", "Clients", "customers"], ["/admin/support", "Support", "support"], ["/admin/whatsapp", "WhatsApp", "wa"],
-  ["/admin/videos", "Video uploads", "upload"], ["/admin/ads", "Ads", "ads"], ["/admin/billing", "Plans and billing", "card"],
+  ["/admin/videos", "Content uploads", "upload"], ["/admin/ads", "Ads", "ads"], ["/admin/billing", "Plans and billing", "card"],
   ["/admin/team", "Team", "team"],
 ] as const;
 export const adminNum = (href: string) => ADMIN_NAV.findIndex(([h]) => h === href) + 1;

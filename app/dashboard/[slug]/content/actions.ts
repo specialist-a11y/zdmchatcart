@@ -4,7 +4,8 @@ import { after } from "next/server";
 import { revalidatePath } from "next/cache";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
-import { checkPost, type MediaKind, type Platform } from "@/lib/posts";
+import { checkPost, ratioOf, type MediaKind, type Platform } from "@/lib/posts";
+import { autoCaption, captionFor, captionsEnabled } from "@/lib/captions";
 import { runDuePosts } from "@/lib/publish";
 
 const safeName = (n: string) => n.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "file";
@@ -23,17 +24,53 @@ export async function getContentUploadUrl(slug: string, fileName: string) {
 }
 
 /** Step 2: add the file to the library once it's in storage. */
-export async function registerContent(slug: string, path: string, title: string, kind: MediaKind, seconds: number | null) {
+export async function registerContent(slug: string, input: {
+  path: string; title: string; kind: MediaKind; seconds: number | null; width: number | null; height: number | null; thumbPath: string | null;
+}) {
   const { supabase, business, user } = await requireMembership(slug);
-  if (!path.startsWith(`${business.id}/uploads/`) || !["video", "image"].includes(kind)) return { error: "Bad upload" };
-  const { error } = await db(supabase).from("video_clips").insert({
-    business_id: business.id, shoot_id: null, storage_path: path, title: title.slice(0, 120) || (kind === "image" ? "Photo" : "Video"),
-    kind, source: "client", uploaded_by: user.id, status: "published",
-    seconds: kind === "video" && seconds && seconds > 0 ? Math.min(600, Math.round(seconds)) : null,
-  });
+  const mine = (p: string | null) => !p || p.startsWith(`${business.id}/uploads/`);
+  if (!input.path || !mine(input.path) || !mine(input.thumbPath) || !["video", "image"].includes(input.kind)) return { error: "Bad upload" };
+  const n = (v: number | null) => (v && v > 0 ? Math.round(v) : null);
+  const client = db(supabase);
+  const { data, error } = await client.from("video_clips").insert({
+    business_id: business.id, shoot_id: null, storage_path: input.path,
+    title: input.title.slice(0, 120) || (input.kind === "image" ? "Photo" : "Video"),
+    kind: input.kind, source: "client", uploaded_by: user.id, status: "published",
+    seconds: input.kind === "video" && input.seconds && input.seconds > 0 ? Math.min(600, Math.round(input.seconds)) : null,
+    width: n(input.width), height: n(input.height), thumb_path: input.thumbPath,
+  }).select("id").single();
   if (error) return { error: error.message };
+  // Write the caption in the background so the upload finishes straight away.
+  if (captionsEnabled()) after(() => autoCaption(client, [data.id]).then(() => revalidatePath(page(slug))));
   revalidatePath(page(slug));
   return { ok: true };
+}
+
+/** AI caption for a post made of these library items (the composer's "Write with AI"). */
+export async function suggestCaption(slug: string, mediaIds: string[]) {
+  const { supabase, business } = await requireMembership(slug);
+  if (!captionsEnabled()) return { error: "AI captions aren't switched on yet (ANTHROPIC_API_KEY is missing)." };
+  const client = db(supabase);
+  const { data } = await client.from("video_clips").select("id, kind, title, storage_path, thumb_path").eq("business_id", business.id).in("id", mediaIds.slice(0, 10));
+  const order = new Map(mediaIds.map((id, i) => [id, i]));
+  const clips = (data ?? []).sort((a, b) => order.get(a.id)! - order.get(b.id)!);
+  if (!clips.length) return { error: "Pick some photos or videos first." };
+  const caption = await captionFor(client, business.id, clips);
+  return caption ? { caption } : { error: "Couldn't write a caption just now. Try again in a moment." };
+}
+
+/** Write (or rewrite) the saved caption on one library item, e.g. a ZDMINC clip with none. */
+export async function captionClip(slug: string, id: string) {
+  const { supabase, business } = await requireMembership(slug);
+  if (!captionsEnabled()) return { error: "AI captions aren't switched on yet (ANTHROPIC_API_KEY is missing)." };
+  const client = db(supabase);
+  const { data: clip } = await client.from("video_clips").select("id, kind, title, storage_path, thumb_path").eq("id", id).eq("business_id", business.id).maybeSingle();
+  if (!clip) return { error: "Not found" };
+  const caption = await captionFor(client, business.id, [clip]);
+  if (!caption) return { error: "Couldn't write a caption just now. Try again in a moment." };
+  await client.from("video_clips").update({ caption }).eq("id", id);
+  revalidatePath(page(slug));
+  return { caption };
 }
 
 /** Clients can delete their own uploads, unless a scheduled post still needs them. */
@@ -41,13 +78,13 @@ export async function deleteContent(slug: string, id: string) {
   const { supabase, business, role } = await requireMembership(slug);
   if (!canPost(role)) return { error: "Only owners and admins can delete." };
   const admin = db(supabase);
-  const { data: item } = await admin.from("video_clips").select("id, storage_path, source").eq("id", id).eq("business_id", business.id).maybeSingle();
+  const { data: item } = await admin.from("video_clips").select("id, storage_path, thumb_path, source").eq("id", id).eq("business_id", business.id).maybeSingle();
   if (!item) return { error: "Not found" };
   if (item.source !== "client") return { error: "ZDMINC clips can't be deleted here. Ask the team to hide it." };
   const { count } = await admin.from("social_posts").select("id", { count: "exact", head: true })
     .eq("business_id", business.id).in("status", ["scheduled", "publishing"]).contains("media_ids", [id]);
   if (count) return { error: "This is in a scheduled post. Cancel that post first." };
-  await admin.storage.from("client-videos").remove([item.storage_path]);
+  await admin.storage.from("client-videos").remove([item.storage_path, ...(item.thumb_path ? [item.thumb_path] : [])]);
   await admin.from("video_clips").delete().eq("id", id);
   revalidatePath(page(slug));
   return { ok: true };
@@ -65,13 +102,15 @@ export async function schedulePost(slug: string, input: { mediaIds: string[]; pl
   if (!canPost(role)) return { error: "Only owners and admins can schedule posts." };
   const admin = db(supabase);
   const ids = [...new Set(input.mediaIds)];
-  const { data: rows } = await admin.from("video_clips").select("id, kind, status").eq("business_id", business.id).in("id", ids);
-  const byId = new Map((rows ?? []).filter((r) => r.status === "published").map((r) => [r.id, r.kind as MediaKind]));
+  const { data: rows } = await admin.from("video_clips").select("id, kind, status, width, height").eq("business_id", business.id).in("id", ids);
+  const live = (rows ?? []).filter((r) => r.status === "published");
+  const byId = new Map(live.map((r) => [r.id, r.kind as MediaKind]));
+  const ratio = new Map(live.map((r) => [r.id, ratioOf(r.width, r.height)]));
   if (byId.size !== ids.length) return { error: "Some of those items aren't in your library any more." };
   const when = input.now ? new Date() : new Date(input.when);
   const caption = input.caption.trim();
   const platforms = [...new Set(input.platforms)];
-  const problem = checkPost({ kinds: ids.map((id) => byId.get(id)!), platforms, caption, when });
+  const problem = checkPost({ kinds: ids.map((id) => byId.get(id)!), ratios: ids.map((id) => ratio.get(id) ?? null), platforms, caption, when });
   if (problem) return { error: problem };
 
   const { data: conn } = await admin.from("integrations").select("status, config").eq("business_id", business.id).eq("provider", "instagram").maybeSingle();
@@ -137,7 +176,7 @@ export async function sendChosenToCalendar(slug: string, input: { clipIds: strin
   const admin = db(supabase);
 
   const [{ data: clips }, { data: conn }, { data: active }] = await Promise.all([
-    admin.from("video_clips").select("id, kind, caption, chosen, status").eq("business_id", business.id).in("id", ids),
+    admin.from("video_clips").select("id, kind, title, caption, chosen, status, storage_path, thumb_path, width, height").eq("business_id", business.id).in("id", ids),
     admin.from("integrations").select("status, config").eq("business_id", business.id).eq("provider", "instagram").maybeSingle(),
     admin.from("social_posts").select("media_ids").eq("business_id", business.id).in("status", ["scheduled", "publishing", "published", "partial"]),
   ]);
@@ -148,11 +187,19 @@ export async function sendChosenToCalendar(slug: string, input: { clipIds: strin
   const todo = (clips ?? []).filter((c) => c.status === "published" && c.chosen && !already.has(c.id)).sort((a, b) => order.get(a.id)! - order.get(b.id)!);
   if (!todo.length) return { error: "Those videos are already on the calendar." };
 
+  // Clips without a caption get one written now, and it's saved on the clip too.
+  if (captionsEnabled()) {
+    await Promise.all(todo.filter((c) => !c.caption?.trim()).map(async (c) => {
+      c.caption = await captionFor(admin, business.id, [c]);
+      if (c.caption) await admin.from("video_clips").update({ caption: c.caption }).eq("id", c.id);
+    }));
+  }
+
   const rows = [];
   for (let i = 0; i < todo.length; i++) {
     const when = new Date(start.getTime() + i * every * 864e5);
     const caption = (todo[i].caption ?? "").trim();
-    const problem = checkPost({ kinds: [todo[i].kind as MediaKind], platforms, caption, when });
+    const problem = checkPost({ kinds: [todo[i].kind as MediaKind], ratios: [ratioOf(todo[i].width, todo[i].height)], platforms, caption, when });
     if (problem) return { error: problem };
     rows.push({
       business_id: business.id, caption, media_ids: [todo[i].id], platforms, scheduled_at: when.toISOString(),

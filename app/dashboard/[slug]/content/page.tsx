@@ -18,7 +18,7 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
   const { supabase, business, role } = await requireMembership(slug);
   const canPost = role === "owner" || role === "admin";
   const [{ data: rows }, { data: sub }, { data: conn }, { data: upcoming }, { data: recent }, { data: shootRows }, { data: used }] = await Promise.all([
-    supabase.from("video_clips").select("id, kind, source, shoot_id, title, caption, seconds, storage_path, chosen, skipped, created_at, video_shoots(month)")
+    supabase.from("video_clips").select("id, kind, source, shoot_id, title, caption, seconds, storage_path, thumb_path, width, height, chosen, skipped, created_at, video_shoots(month)")
       .eq("business_id", business.id).eq("status", "published").order("created_at", { ascending: false }).limit(200),
     supabase.from("subscriptions").select("plans!subscriptions_plan_id_fkey(video_clips)").eq("business_id", business.id).maybeSingle(),
     supabase.from("integrations").select("status, config").eq("business_id", business.id).eq("provider", "instagram").maybeSingle(),
@@ -27,13 +27,16 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
     supabase.from("video_shoots").select("id, month, shoot_date").eq("business_id", business.id).not("published_at", "is", null).order("month", { ascending: false }).limit(12),
     supabase.from("social_posts").select("media_ids").eq("business_id", business.id).in("status", ["scheduled", "publishing", "published", "partial"]),
   ]);
-  const { data: signed } = rows?.length ? await supabase.storage.from("client-videos").createSignedUrls(rows.map((c) => c.storage_path), 3600) : { data: [] };
-  const url = (p: string) => signed?.find((s) => s.path === p)?.signedUrl ?? undefined;
+  const paths = (rows ?? []).flatMap((c: any) => [c.storage_path, ...(c.thumb_path ? [c.thumb_path] : [])]);
+  const { data: signed } = paths.length ? await supabase.storage.from("client-videos").createSignedUrls(paths, 3600) : { data: [] };
+  const urls = new Map((signed ?? []).map((x) => [x.path, x.signedUrl]));
+  const url = (p: string | null) => (p ? urls.get(p) ?? undefined : undefined);
 
   const items: LibraryItem[] = (rows ?? []).map((c: any) => ({
-    id: c.id, kind: c.kind, source: c.source, title: c.title, caption: c.caption, url: url(c.storage_path), seconds: c.seconds, chosen: c.chosen,
+    id: c.id, kind: c.kind, source: c.source, title: c.title, caption: c.caption, url: url(c.storage_path), thumbUrl: url(c.thumb_path),
+    ratio: c.width && c.height ? c.width / c.height : null, seconds: c.seconds, chosen: c.chosen,
     label: c.source === "zdm"
-      ? `ZDMINC shoot${c.video_shoots?.month ? ` · ${new Date(`${c.video_shoots.month}T12:00:00Z`).toLocaleDateString("en-GB", { month: "long" })}` : ""}`
+      ? `ZDMINC${c.shoot_id ? " shoot" : ""}${c.video_shoots?.month ? ` · ${new Date(`${c.video_shoots.month}T12:00:00Z`).toLocaleDateString("en-GB", { month: "long" })}` : ""}`
       : `Uploaded ${new Date(c.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}`,
   }));
   const byId = new Map(items.map((i) => [i.id, i]));
@@ -43,8 +46,8 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
   const zdmChosen = items.filter((i) => i.source === "zdm" && i.chosen).length;
   const onCalendar = new Set((used ?? []).flatMap((p) => p.media_ids as string[]));
   const shoots: Shoot[] = (shootRows ?? []) as Shoot[];
-  const clips: Clip[] = (rows ?? []).filter((c: any) => c.source === "zdm" && c.kind === "video" && c.shoot_id).map((c: any) => ({
-    id: c.id, shoot_id: c.shoot_id, title: c.title, caption: c.caption, seconds: c.seconds, url: url(c.storage_path),
+  const clips: Clip[] = (rows ?? []).filter((c: any) => c.source === "zdm").map((c: any) => ({
+    id: c.id, shoot_id: c.shoot_id, kind: c.kind, title: c.title, caption: c.caption, seconds: c.seconds, url: url(c.storage_path), thumbUrl: url(c.thumb_path),
     chosen: c.chosen, skipped: c.skipped, scheduled: onCalendar.has(c.id),
   }));
   const tab = tabParam === "videos" || tabParam === "library" ? tabParam : clips.length ? "videos" : "library";
@@ -58,8 +61,8 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
     return (
       <div className="row" style={{ alignItems: "flex-start", gap: 12, padding: "10px 0", borderTop: "1px solid var(--line)", flexWrap: "nowrap" }}>
         <div style={{ width: 48, height: 60, flex: "none", borderRadius: 8, overflow: "hidden", background: "#0b0f0e" }}>
-          {first?.url && (first.kind === "image"
-            ? <img src={first.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+          {first?.url && (first.kind === "image" || first.thumbUrl
+            ? <img src={first.kind === "image" ? first.url : first.thumbUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             : <video src={first.url} muted preload="metadata" style={{ width: "100%", height: "100%", objectFit: "cover" }} />)}
         </div>
         <div className="stack" style={{ gap: 3, flex: 1, minWidth: 0 }}>
@@ -91,7 +94,7 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
         actions={allowance > 0 ? <span className="badge paid">{zdmChosen} picked for ZDMINC · {allowance} clips a month on your plan</span> : undefined} />
 
       <nav className="pills" aria-label="Content sections">
-        {tabLink("videos", `ZDMINC videos${clips.length ? ` · ${clips.length}` : ""}`)}
+        {tabLink("videos", `From ZDMINC${clips.length ? ` · ${clips.length}` : ""}`)}
         {tabLink("library", "Library and posting")}
       </nav>
 

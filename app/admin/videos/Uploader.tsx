@@ -3,14 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { duration, toInstagramJpeg } from "@/lib/media-prep";
-import { getUploadUrl, registerClip } from "./video-actions";
+import { preparePhoto, readMedia, videoThumb } from "@/lib/media-prep";
+import { getUploadUrl, registerClip, type Target } from "./video-actions";
 
 type Item = { name: string; size: number; state: "waiting" | "uploading" | "done" | "failed"; error?: string };
 
 const mb = (n: number) => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`);
 
-export default function Uploader({ shootId }: { shootId: string }) {
+export default function Uploader({ target, hint }: { target: Target; hint?: string }) {
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(false);
   const [over, setOver] = useState(false);
@@ -29,13 +29,26 @@ export default function Uploader({ shootId }: { shootId: string }) {
       set({ state: "uploading" });
       try {
         const kind = original.type.startsWith("image/") ? "image" as const : "video" as const;
-        const file = kind === "image" ? await toInstagramJpeg(original) : original;
-        const signed = await getUploadUrl(shootId, file.name);
-        if ("error" in signed) throw new Error(signed.error);
-        const { error } = await supabase.storage.from("client-videos").uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type });
-        if (error) throw new Error(error.message);
-        const secs = kind === "video" ? await duration(file) : null;
-        const res = await registerClip(shootId, signed.path, original.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " "), secs, kind);
+        const send = async (file: File) => {
+          const signed = await getUploadUrl(target, file.name);
+          if ("error" in signed) throw new Error(signed.error);
+          const { error } = await supabase.storage.from("client-videos").uploadToSignedUrl(signed.path, signed.token, file, { contentType: file.type });
+          if (error) throw new Error(error.message);
+          return signed.path;
+        };
+        const title = original.name.replace(/\.[^.]+$/, "").replace(/[_-]+/g, " ");
+        let res;
+        if (kind === "image") {
+          const photo = await preparePhoto(original);
+          const path = await send(photo.file);
+          res = await registerClip(target, { path, title, kind, seconds: null, width: photo.width, height: photo.height, thumbPath: null });
+        } else {
+          const info = await readMedia(original).catch(() => null);
+          const thumb = await videoThumb(original);
+          const thumbPath = thumb ? await send(thumb).catch(() => null) : null;
+          const path = await send(original);
+          res = await registerClip(target, { path, title, kind, seconds: info?.seconds ?? null, width: info?.width ?? null, height: info?.height ?? null, thumbPath });
+        }
         if ("error" in res && res.error) throw new Error(res.error);
         set({ state: "done" });
       } catch (e: any) {
@@ -55,7 +68,7 @@ export default function Uploader({ shootId }: { shootId: string }) {
         style={{ border: `2px dashed var(--teal)`, background: over ? "#d6e6ff" : "var(--teal-soft)", borderRadius: 16, padding: 26, alignItems: "center", textAlign: "center", cursor: "pointer" }}
       >
         <strong style={{ fontSize: 16 }}>Drop finished clips and photos here, or click to choose</strong>
-        <span className="muted" style={{ fontWeight: 400 }}>MP4, MOV, JPEG or PNG. They go straight to the client's private library.</span>
+        <span className="muted" style={{ fontWeight: 400 }}>{hint ?? "MP4, MOV, JPEG or PNG. They go straight to the client's private library."} Captions are written by AI.</span>
         <input type="file" accept="video/*,image/*" multiple disabled={busy} onChange={(e) => e.target.files && upload(e.target.files)} style={{ display: "none" }} />
       </label>
       {items.length > 0 && (
