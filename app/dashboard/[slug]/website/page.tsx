@@ -26,6 +26,7 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
     supabase.from("short_links").select("id, code, label, ref, clicks, last_click_at, created_at").eq("business_id", business.id).order("created_at", { ascending: false }),
     supabase.from("businesses").select("site_template, hero_image_url").eq("id", business.id).maybeSingle(),
   ]);
+  const { data: heroCopy } = await supabase.from("businesses").select("hero_headline, hero_subheadline, hero_text").eq("id", business.id).maybeSingle();
   const refs = [...new Set((links ?? []).map((l) => l.ref))];
   const { data: sold } = refs.length
     ? await supabase.from("orders").select("attribution, total").eq("business_id", business.id).in("attribution", refs).in("status", ["paid", "ready", "fulfilled"])
@@ -127,7 +128,9 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
         </section>
       </div>
 
-      <TemplatePicker slug={slug} current={(look as any)?.site_template ?? "classic"} heroUrl={(look as any)?.hero_image_url ?? null} canEdit={canEdit} />
+      <TemplatePicker slug={slug} current={(look as any)?.site_template ?? "classic"} heroUrl={(look as any)?.hero_image_url ?? null} canEdit={canEdit}
+        businessName={business.name} tagline={business.tagline}
+        copy={{ headline: (heroCopy as any)?.hero_headline ?? "", subheadline: (heroCopy as any)?.hero_subheadline ?? "", text: (heroCopy as any)?.hero_text ?? "" }} />
 
       <section id="domain" className="card stack">
         <h2>Your own domain</h2>

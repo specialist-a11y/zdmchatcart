@@ -7,26 +7,13 @@ type Props = { params: Promise<{ slug: string }>; searchParams: Promise<{ ref?: 
 
 async function load(slug: string) {
   const supabase = await createClient();
-  let { data: business, error } = await supabase
-    .from("businesses")
-    .select("id, name, slug, tagline, logo_url, brand_color, currency, whatsapp_number, description, address, opening_hours, delivery_info, public_email, instagram, facebook, website_url, meta_pixel_id, site_template, hero_image_url")
-    .eq("slug", slug)
-    .maybeSingle();
-  if (error) {
-    // Before migration 0012: no template columns yet.
-    ({ data: business, error } = await supabase
-      .from("businesses")
-      .select("id, name, slug, tagline, logo_url, brand_color, currency, whatsapp_number, description, address, opening_hours, delivery_info, public_email, instagram, facebook, website_url, meta_pixel_id")
-      .eq("slug", slug)
-      .maybeSingle() as any);
-  }
-  if (error) {
-    const fallback = await supabase
-      .from("businesses")
-      .select("id, name, slug, tagline, logo_url, brand_color, currency, whatsapp_number")
-      .eq("slug", slug)
-      .maybeSingle();
-    business = fallback.data as any;
+  // Newest columns first; fall back if a migration hasn't run yet (0013 hero text, 0012 templates, 0003 public info).
+  const base = "id, name, slug, tagline, logo_url, brand_color, currency, whatsapp_number";
+  const info = `${base}, description, address, opening_hours, delivery_info, public_email, instagram, facebook, website_url, meta_pixel_id`;
+  let business: any = null;
+  for (const cols of [`${info}, site_template, hero_image_url, hero_headline, hero_subheadline, hero_text`, `${info}, site_template, hero_image_url`, info, base]) {
+    const { data, error } = await supabase.from("businesses").select(cols).eq("slug", slug).maybeSingle();
+    if (!error) { business = data; break; }
   }
   if (!business) return null;
   const q = (cols: string) => supabase.from("products").select(cols).eq("business_id", business!.id).eq("active", true).order("sort_order").order("created_at");

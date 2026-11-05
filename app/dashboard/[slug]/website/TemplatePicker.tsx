@@ -55,14 +55,21 @@ function Mock({ id, swatch }: { id: TemplateId; swatch: [string, string, string]
   );
 }
 
-export default function TemplatePicker({ slug, current, heroUrl, canEdit }: { slug: string; current: string; heroUrl: string | null; canEdit: boolean }) {
+export type HeroCopy = { headline: string; subheadline: string; text: string };
+
+export default function TemplatePicker({ slug, current, heroUrl, copy: savedCopy, businessName, tagline, canEdit }: {
+  slug: string; current: string; heroUrl: string | null; copy: HeroCopy; businessName: string; tagline: string | null; canEdit: boolean;
+}) {
   const router = useRouter();
   const [chosen, setChosen] = useState<string>(current || "classic");
   const [hero, setHero] = useState(heroUrl ?? "");
+  const [copy, setCopy] = useState<HeroCopy>(savedCopy);
+  const [previewKey, setPreviewKey] = useState(0);
+  const copyDirty = copy.headline !== savedCopy.headline || copy.subheadline !== savedCopy.subheadline || copy.text !== savedCopy.text;
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [msg, setMsg] = useState<{ ok?: string; error?: string }>({});
-  const dirty = chosen !== (current || "classic") || hero !== (heroUrl ?? "");
+  const dirty = chosen !== (current || "classic") || hero !== (heroUrl ?? "") || copyDirty;
 
   async function upload(file?: File) {
     if (!file) return;
@@ -84,10 +91,11 @@ export default function TemplatePicker({ slug, current, heroUrl, canEdit }: { sl
   async function save() {
     setBusy(true);
     setMsg({});
-    const res = await saveLook(slug, { template: chosen, heroUrl: hero });
+    const res = await saveLook(slug, { template: chosen, heroUrl: hero, ...copy });
     setBusy(false);
     if ("error" in res && res.error) return setMsg({ error: res.error });
-    setMsg({ ok: "Saved. Your website has the new look." });
+    setMsg({ ok: "Saved. Your website is updated." });
+    setPreviewKey((k) => k + 1);
     router.refresh();
   }
 
@@ -116,12 +124,32 @@ export default function TemplatePicker({ slug, current, heroUrl, canEdit }: { sl
       </div>
       <p className="muted" style={{ margin: 0, fontSize: 14 }}><b style={{ color: "var(--ink)" }}>{TEMPLATES.find((t) => t.id === chosen)?.name}:</b> {TEMPLATES.find((t) => t.id === chosen)?.blurb}</p>
 
-      {chosen !== "classic" && (
+      <div className="card stack" style={{ background: "#fafbfa", gap: 12 }}>
+        <div>
+          <h3 style={{ fontSize: 20 }}>Hero section</h3>
+          <p className="muted" style={{ margin: "2px 0 0", fontSize: 13 }}>The first thing visitors see at the top of your website. Leave blank to show your business name and tagline.</p>
+        </div>
+        <label>Headline <span className="muted" style={{ fontWeight: 400 }}>· {copy.headline.length}/120</span>
+          <input value={copy.headline} maxLength={120} disabled={!canEdit} onChange={(e) => setCopy({ ...copy, headline: e.target.value })}
+            placeholder={businessName} />
+        </label>
+        <label>Sub-headline <span className="muted" style={{ fontWeight: 400 }}>· {copy.subheadline.length}/200</span>
+          <input value={copy.subheadline} maxLength={200} disabled={!canEdit} onChange={(e) => setCopy({ ...copy, subheadline: e.target.value })}
+            placeholder={tagline || "Fresh Bajan baking, made to order"} />
+        </label>
+        <label>Paragraph <span className="muted" style={{ fontWeight: 400 }}>· {copy.text.length}/600</span>
+          <textarea rows={3} value={copy.text} maxLength={600} disabled={!canEdit} onChange={(e) => setCopy({ ...copy, text: e.target.value })}
+            placeholder="A few lines about what you do, who it's for, and how to order. Line breaks are kept." />
+        </label>
+        {chosen === "classic" && (copy.headline || copy.subheadline || copy.text) && <span className="muted" style={{ fontSize: 13 }}>With hero text, Classic shows a full hero section instead of the slim name bar.</span>}
+      </div>
+
+      {(chosen !== "classic" || copy.headline || copy.subheadline || copy.text) && (
         <div className="tp-hero">
           {hero ? <img src={hero} alt="Cover" /> : null}
           <div className="stack" style={{ gap: 6 }}>
             <b style={{ fontSize: 14 }}>Cover photo</b>
-            <span className="muted" style={{ fontSize: 13 }}>{hero ? "Shown behind your name at the top." : "None yet, so your first product photo is used."}</span>
+            <span className="muted" style={{ fontSize: 13 }}>{hero ? "Shown behind the hero section." : chosen === "classic" ? "None yet, so the hero uses your brand colour." : "None yet, so your first product photo is used."}</span>
           </div>
           {canEdit && (
             <div className="row">
@@ -140,10 +168,10 @@ export default function TemplatePicker({ slug, current, heroUrl, canEdit }: { sl
 
       <div className="tp-frame">
         <div className="row" style={{ justifyContent: "space-between", padding: "8px 14px", borderBottom: "1.5px solid var(--line)", background: "#fafbfa" }}>
-          <span className="muted" style={{ fontSize: 13 }}>Preview{chosen !== current ? " (not saved yet)" : ""}{hero !== (heroUrl ?? "") ? ". Save to see the new cover photo." : ""}</span>
+          <span className="muted" style={{ fontSize: 13 }}>Preview{chosen !== current ? " (template not saved yet)" : ""}{hero !== (heroUrl ?? "") || copyDirty ? ". Save to see your hero changes here." : ""}</span>
           <a href={`/s/${slug}?template=${chosen}`} target="_blank" rel="noreferrer" style={{ fontSize: 13, fontWeight: 700 }}>Open full size ↗</a>
         </div>
-        <iframe key={chosen} src={`/s/${slug}?template=${chosen}`} title="Website preview" />
+        <iframe key={`${chosen}-${previewKey}`} src={`/s/${slug}?template=${chosen}`} title="Website preview" />
       </div>
     </section>
   );

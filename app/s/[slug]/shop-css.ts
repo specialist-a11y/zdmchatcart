@@ -25,6 +25,10 @@ export const SHOP_CSS = `
 .s-herotext { padding-top: 72px; padding-bottom: 64px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
 .s-hero h1 { font-size: clamp(40px, 7vw, 76px); line-height: .95; margin: 0; max-width: 820px; }
 .s-hero p { margin: 0; font-size: 18px; max-width: 560px; opacity: .95; }
+.s-eyebrow { font-size: 13px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; opacity: .9; }
+.s-hero .s-sub { font-size: clamp(18px, 2.4vw, 22px); font-weight: 600; max-width: 640px; }
+.s-hero .s-herop { font-size: 16px; line-height: 1.6; max-width: 600px; opacity: .9; white-space: pre-line; }
+.t-beauty .s-hero .s-sub, .t-beauty .s-hero .s-herop { margin-left: auto; margin-right: auto; }
 .s-logo { border-radius: 16px; object-fit: cover; background: #fff; }
 .s-herocta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
 .s-hero .s-btn { background: #fff; color: var(--fg); border-color: #fff; }

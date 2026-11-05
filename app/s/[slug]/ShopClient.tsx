@@ -13,6 +13,7 @@ type Business = {
   description?: string | null; address?: string | null; opening_hours?: string | null; delivery_info?: string | null;
   public_email?: string | null; instagram?: string | null; facebook?: string | null; website_url?: string | null;
   meta_pixel_id?: string | null; site_template?: string | null; hero_image_url?: string | null;
+  hero_headline?: string | null; hero_subheadline?: string | null; hero_text?: string | null;
 };
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: unknown } }
@@ -171,7 +172,12 @@ export default function ShopClient({ business, products, attribution, previewTem
     return [...m.entries()];
   }, [products]);
 
-  const hero = business.hero_image_url || products.find((p) => p.image_url)?.image_url || null;
+  const headline = business.hero_headline?.trim() || null;
+  const subheadline = business.hero_subheadline?.trim() || business.tagline || null;
+  const heroText = business.hero_text?.trim() || null;
+  // Classic keeps its slim bar unless a hero section has been written for it.
+  const classicBar = t.id === "classic" && !headline && !business.hero_subheadline && !heroText;
+  const hero = business.hero_image_url || (t.id === "classic" ? null : products.find((p) => p.image_url)?.image_url) || null;
   const wa = business.whatsapp_number ? `https://wa.me/${business.whatsapp_number.replace(/\D/g, "")}` : null;
   const services = products.length > 0 && products.every((p) => p.kind === "service");
   const heroCta = { classic: "Shop now", caterer: "See the menu", artist: "View the work", beauty: services ? "See services" : "Book now", trades: "See services" }[t.id];
@@ -223,7 +229,7 @@ export default function ShopClient({ business, products, attribution, previewTem
       {t.font && <link rel="stylesheet" href={t.font.url} precedence="default" />}
       <style dangerouslySetInnerHTML={{ __html: SHOP_CSS }} />
 
-      {t.id === "classic" ? (
+      {classicBar ? (
         <header className="s-bar">
           <div className="s-wrap s-brand">
             {business.logo_url && <img src={business.logo_url} alt="" width={56} height={56} />}
@@ -234,8 +240,10 @@ export default function ShopClient({ business, products, attribution, previewTem
         <header className="s-hero" style={hero ? { ["--hero" as any]: `url("${hero.replace(/"/g, "%22")}")` } : undefined} data-has-image={hero ? "" : undefined}>
           <div className="s-wrap s-herotext">
             {business.logo_url && <img className="s-logo" src={business.logo_url} alt="" width={64} height={64} />}
-            <h1>{business.name}</h1>
-            {business.tagline && <p>{business.tagline}</p>}
+            {headline && <span className="s-eyebrow">{business.name}</span>}
+            <h1>{headline ?? business.name}</h1>
+            {subheadline && <p className="s-sub">{subheadline}</p>}
+            {heroText && <p className="s-herop">{heroText}</p>}
             <div className="s-herocta">
               <a className="s-btn" href="#items">{heroCta}</a>
               {t.id === "trades" && wa && <a className="s-btn ghost" href={wa} target="_blank" rel="noreferrer">WhatsApp us</a>}
