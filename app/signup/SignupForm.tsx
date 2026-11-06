@@ -6,7 +6,7 @@ import { codePrefix, shopAddress } from "@/lib/signup";
 export function SignupForm({ action, plan, defaults, site, note, error }: {
   action: (f: FormData) => void | Promise<void>;
   plan: string;
-  defaults: { contact_name: string; name: string; slug: string; prefix: string; whatsapp: string };
+  defaults: { contact_name: string; email: string; name: string; slug: string; prefix: string; whatsapp: string };
   site: string;
   note: string;
   error?: string;
@@ -22,6 +22,10 @@ export function SignupForm({ action, plan, defaults, site, note, error }: {
       <h2>Your business</h2>
       <input type="hidden" name="plan" value={plan} />
       <label>Your name<input name="contact_name" required defaultValue={defaults.contact_name} autoComplete="name" /></label>
+      <label>Email
+        <input name="email" type="email" required defaultValue={defaults.email} autoComplete="email" inputMode="email" autoCapitalize="none" />
+        <span className="muted" style={{ fontSize: 13, fontWeight: 400 }}>Invoices and account updates go here. You log in with the email you signed up with.</span>
+      </label>
       <label>Business name
         <input name="name" required placeholder="Island Crumb Bakery" value={name} onChange={(e) => {
           setName(e.target.value);

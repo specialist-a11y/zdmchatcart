@@ -20,6 +20,7 @@ const Form = z.object({
   prefix: z.string().regex(/^[A-Z]{1,4}$/, "Order code prefix: 1 to 4 letters"),
   whatsapp: z.string().regex(/^\d{7,15}$/, "WhatsApp number: digits with the country code, e.g. 1 246 555 1234"),
   contact_name: z.string().min(2, "Add your name").max(80),
+  email: z.string().email("Add a valid email address").max(120),
 });
 
 async function signUp(f: FormData) {
@@ -29,11 +30,11 @@ async function signUp(f: FormData) {
   // Spaces, capitals and symbols in the shop address are fixed here, not sent back as an error.
   const slug = shopAddress(get("slug") || get("name"));
   // On an error, the form comes back filled in (the WhatsApp number isn't put in the link).
-  const keep = new URLSearchParams({ contact_name: get("contact_name"), name: get("name"), slug, prefix: get("prefix").toUpperCase() });
+  const keep = new URLSearchParams({ contact_name: get("contact_name"), email: get("email"), name: get("name"), slug, prefix: get("prefix").toUpperCase() });
   const back = (msg: string): never => redirect(`/signup?plan=${encodeURIComponent(plan)}&error=${encodeURIComponent(msg)}&${keep}#details`);
   const parsed = Form.safeParse({
     plan, name: get("name"), slug, prefix: get("prefix").toUpperCase().replace(/[^A-Z]/g, ""),
-    whatsapp: get("whatsapp").replace(/\D/g, ""), contact_name: get("contact_name"),
+    whatsapp: get("whatsapp").replace(/\D/g, ""), contact_name: get("contact_name"), email: get("email").toLowerCase(),
   });
   if (!parsed.success) back(parsed.error.issues[0].message);
   const v = parsed.data!;
@@ -47,7 +48,7 @@ async function signUp(f: FormData) {
   const { data: bid, error } = await supabase.rpc("create_business", { p_name: v.name, p_slug: v.slug, p_prefix: v.prefix, p_whatsapp: v.whatsapp });
   if (error || !bid) back(error?.code === "23505" ? "That shop address is taken, try another" : error?.message ?? "Couldn't create your account");
 
-  await admin.from("businesses").update({ contact_name: v.contact_name, contact_phone: v.whatsapp, contact_email: user!.email, billing_email: user!.email }).eq("id", bid);
+  await admin.from("businesses").update({ contact_name: v.contact_name, contact_phone: v.whatsapp, contact_email: v.email, billing_email: v.email }).eq("id", bid);
   await admin.from("subscriptions").upsert({ business_id: bid, plan_id: p!.id, status: "pending_payment" });
   const fi = firstInvoice({ name: p!.name, monthly_price: Number(p!.monthly_price), setup_fee: Number(p!.setup_fee) });
   try {
@@ -57,7 +58,7 @@ async function signUp(f: FormData) {
   redirect(`/dashboard/${v.slug}/billing?welcome=1`);
 }
 
-export default async function SignupPage({ searchParams }: { searchParams: Promise<{ plan?: string; error?: string; contact_name?: string; name?: string; slug?: string; prefix?: string }> }) {
+export default async function SignupPage({ searchParams }: { searchParams: Promise<{ plan?: string; error?: string; contact_name?: string; email?: string; name?: string; slug?: string; prefix?: string }> }) {
   const sp = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -102,8 +103,8 @@ export default async function SignupPage({ searchParams }: { searchParams: Promi
           <div id="details">
             <SignupForm action={signUp} plan={chosen.id} error={sp.error}
               site={(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/^https?:\/\//, "").replace(/\/$/, "")}
-              defaults={{ contact_name: sp.contact_name ?? (user.user_metadata as any)?.full_name ?? "", name: sp.name ?? "", slug: sp.slug ?? "", prefix: sp.prefix ?? "", whatsapp: "" }}
-              note={`Signed in as ${user.email}. Next you'll see your setup invoice: ${money(Number(chosen.setup_fee) + Number(chosen.monthly_price))} (${money(chosen.setup_fee)} setup + first month), payable by card or bank transfer.`} />
+              defaults={{ contact_name: sp.contact_name ?? (user.user_metadata as any)?.full_name ?? "", email: sp.email ?? user.email ?? "", name: sp.name ?? "", slug: sp.slug ?? "", prefix: sp.prefix ?? "", whatsapp: "" }}
+              note={`Next you'll see your setup invoice: ${money(Number(chosen.setup_fee) + Number(chosen.monthly_price))} (${money(chosen.setup_fee)} setup + first month), payable by card or bank transfer.`} />
           </div>
         ) : <SignupEmail plan={chosen.id} planName={chosen.name} />
       )}
