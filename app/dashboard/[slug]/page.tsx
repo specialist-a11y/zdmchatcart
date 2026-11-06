@@ -122,7 +122,7 @@ export default async function TodayPage({ params, searchParams }: { params: Prom
         <Kpi label="Paid today" value={money(sum(paidToday), business.currency)} tone="blue"
           sub={change == null ? `${paidToday.length} orders` : `${change >= 0 ? "▲" : "▼"} ${Math.abs(change)}% vs last ${new Date().toLocaleDateString("en-GB", { weekday: "long", timeZone: tz })}`} />
         <Kpi label="Awaiting payment" value={awaiting.length} sub={`${money(sum(awaiting), business.currency)} in open links`} tone={awaiting.length ? "amber" : undefined} />
-        <Kpi label="Carts to recover" value={carts.length} sub="Reminders go out on WhatsApp" />
+        <Kpi label="Carts to recover" value={carts.length} sub={viewingAsStaff || has(ent, "cart_recovery") ? "Reminders go out on WhatsApp" : "Automatic reminders come with Growth"} />
         <Kpi label="New customers this week" value={newCustomers ?? 0} />
       </div>
 

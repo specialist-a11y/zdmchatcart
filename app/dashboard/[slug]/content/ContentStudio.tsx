@@ -73,7 +73,7 @@ function Media({ item, autoPlay }: { item: LibraryItem; autoPlay?: boolean }) {
 }
 
 /* Component ---------------------------------------------------------------------------- */
-export default function ContentStudio({ slug, items, conn, canPost }: { slug: string; items: LibraryItem[]; conn: Connection; canPost: boolean }) {
+export default function ContentStudio({ slug, items, conn, canPost, autopilot = true }: { slug: string; items: LibraryItem[]; conn: Connection; canPost: boolean; autopilot?: boolean }) {
   const router = useRouter();
   const [filter, setFilter] = useState<Filter>("all");
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -273,7 +273,14 @@ export default function ContentStudio({ slug, items, conn, canPost }: { slug: st
 
       {msg.ok && !chosen.length && <p className="ok" role="status">{msg.ok}</p>}
 
-      {canPost && chosen.length > 0 && (
+      {canPost && chosen.length > 0 && !autopilot && (
+        <section className="card stack" aria-label="Scheduling">
+          <b>Scheduling your own posts comes with Marketing Autopilot</b>
+          <span className="muted">On All-in-One, build posts from your photos and videos, get AI captions, and schedule them to Instagram and Facebook. You can still download anything here and post it yourself.</span>
+          <div className="row"><a className="btn blue small" href={`/dashboard/${slug}/billing`}>See plans</a><button type="button" className="btn secondary small" onClick={() => setSelected([])}>Clear</button></div>
+        </section>
+      )}
+      {canPost && chosen.length > 0 && autopilot && (
         <section className="cs-composer" aria-label="New post">
           <div className="stack" style={{ gap: 10 }}>
             <div className="row" style={{ justifyContent: "space-between" }}>

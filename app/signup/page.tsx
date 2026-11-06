@@ -86,7 +86,7 @@ export default async function SignupPage({ searchParams }: { searchParams: Promi
                 {entitlementsFrom(p, "active").features.map((k) => <li key={k}><strong>{featureLabel(k).split(" (")[0]}</strong></li>)}
                 {p.posts_per_month > 0 && <li>{p.posts_per_month} image posts a month made for you</li>}
                 {p.video_clips > 0 && <li>{p.video_clips} short videos a month</li>}
-                <li>{p.seats} team logins</li>
+                <li>{p.seats > 1 ? `Team inbox: ${p.seats} logins` : "1 login"}</li>
               </ul>
               <span className="btn small" style={{ alignSelf: "flex-start", marginTop: "auto" }}>{on ? "Selected" : `Choose ${p.name}`}</span>
             </Link>

@@ -42,7 +42,7 @@ export default async function ShopPage({ params, searchParams }: Props) {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ldJson(ld) }} />
       <ShopClient business={b} products={data.products as any} attribution={ref ?? null} previewTemplate={template ?? null} previewTheme={theme ?? null}
-        openNow={open.label ? open : null} best={data.best} basePath={own ? "" : `/s/${slug}`} today={todayIn()} />
+        openNow={open.label ? open : null} best={data.best} basePath={own ? "" : `/s/${slug}`} today={todayIn()} cartRecovery={data.features.cartRecovery} />
     </>
   );
 }

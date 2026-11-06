@@ -16,7 +16,7 @@ const to = (slug: string, c: string, m: string): never => redirect(`/dashboard/$
 async function sendOn(admin: ReturnType<typeof createAdminClient>, businessId: string, customer: { id: string; phone: string | null }, channel: Channel, body: string, orderId?: string) {
   if (channel === "instagram") return sendIgFromBusiness(admin, businessId, customer.id, body);
   if (!customer.phone) return { ok: false, error: "This customer has no WhatsApp number" };
-  return sendFromBusiness(admin, businessId, customer.phone, body, { customerId: customer.id, orderId: orderId ?? null });
+  return sendFromBusiness(admin, businessId, customer.phone, body, { customerId: customer.id, orderId: orderId ?? null, sentBy: "person" });
 }
 
 async function load(slug: string, customerId: string) {

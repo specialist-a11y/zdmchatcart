@@ -7,7 +7,7 @@ Improve the client CRM using `docs/improvements/`. Read `docs/improvements/READM
 
 ## Stack
 - Next.js 15 App Router, server components and server actions, TypeScript.
-- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0022_mark_paid_final.sql`, so add the next as `0023_...sql` and never edit an applied one except seed text.
+- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0024_plan_limits_ai_assistant.sql`, so add the next as `0025_...sql` and never edit an applied one except seed text.
 - RLS pattern: read policies use `private.is_member(business_id) or private.is_staff()`; writes go through server actions using `createAdminClient()` after an owner/admin role check (`requireMembership(slug)` returns `role`).
 - WhatsApp Cloud API (`lib/whatsapp.ts`), 24-hour window: free text only within 24 hours of the customer's last message, otherwise approved templates.
 - Instagram Graph via the client's Page token (`lib/instagram.ts`, `lib/social.ts`).

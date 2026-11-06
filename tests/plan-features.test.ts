@@ -59,3 +59,15 @@ test("first invoice is setup plus first month", () => {
   assert.match(fi.description, /setup/);
   assert.equal(firstInvoice({ name: "X", monthly_price: 300, setup_fee: 0 }).description, "X: first month");
 });
+
+test("Starter is limited to the core; Growth adds cart recovery, summary and bot automation", async () => {
+  const { entitlementsFrom, has, sectionOpen } = await import("../lib/plan-features.ts");
+  const starter = entitlementsFrom({ id: "starter", name: "Starter", features: [] }, "active");
+  for (const k of ["cart_recovery", "daily_summary", "wa_automations", "ig_autoreplies", "reporting", "marketing_autopilot", "ads", "videos"] as const) assert.equal(has(starter, k), false, k);
+  assert.equal(sectionOpen(starter, "autoreplies"), false);
+  assert.equal(sectionOpen(starter, "ads"), false);
+  assert.equal(sectionOpen(starter, "orders"), true);
+  const growth = entitlementsFrom({ id: "growth", name: "Growth", features: ["ig_autoreplies", "cart_recovery", "daily_summary", "wa_automations"] }, "active");
+  for (const k of ["cart_recovery", "daily_summary", "wa_automations", "ig_autoreplies"] as const) assert.equal(has(growth, k), true, k);
+  assert.equal(has(growth, "reporting"), false);
+});

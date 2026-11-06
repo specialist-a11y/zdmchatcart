@@ -58,10 +58,10 @@ Not in this build yet: automatic cutting of raw footage into clips (upload the e
 3. **Supabase Auth**: Authentication, URL configuration: set Site URL to your live URL and add `<your-url>/auth/callback` to Redirect URLs.
 4. **Run locally**: `npm install`, then `npm run dev` and open http://localhost:3000.
 5. **Deploy**: push to GitHub, import into Vercel, add the same environment variables. `vercel.json` runs the billing job daily at 6am Barbados time; set `CRON_SECRET` in Vercel.
-6. **Admin**: run the files in `supabase/migrations/` from `0002_admin.sql` to `0022_mark_paid_final.sql`, in order, in the Supabase SQL editor, then make yourself staff once:
+6. **Admin**: run the files in `supabase/migrations/` from `0002_admin.sql` to `0024_plan_limits_ai_assistant.sql`, in order, in the Supabase SQL editor, then make yourself staff once:
    `insert into public.platform_staff (user_id, name, role) values ('<your user id from Authentication, Users>', 'Kat', 'owner');`
    Open `/admin`. Add the rest of the team from Team.
-   Then run `0018_bank_transfer.sql` (bank transfer), `0019_plan_features.sql` (plan features, setup fees, signup, ZDMINC bank transfer), `0020_product_import.sql` (product import) , `0021_rentals.sql` (rental mode) and `0022_mark_paid_final.sql` (one final mark-paid function). After 0019, existing clients keep their plan and status; new signups start as pending payment.
+   Then run `0018_bank_transfer.sql` (bank transfer), `0019_plan_features.sql` (plan features, setup fees, signup, ZDMINC bank transfer), `0020_product_import.sql` (product import) , `0021_rentals.sql` (rental mode) , `0022_mark_paid_final.sql` (one final mark-paid function) , `0023_bot_automation_feature.sql` (bot automation on Growth and up) and `0024_plan_limits_ai_assistant.sql` (one login on Starter and Growth, AI product assistant). After 0019, existing clients keep their plan and status; new signups start as pending payment.
 7. **ZDMINC's own Fygaro and WhatsApp** (for billing clients and the admin WhatsApp inbox): fill in the `ZDM_*` variables in `.env.example`. Use a separate WhatsApp number from any client. Point that number's webhook at the same `<your-url>/api/webhooks/whatsapp`; the app tells the two apart by phone number ID. Create one utility template with a single variable, for example "Hi {{1}}, the ZDMINC team has a message for you. Reply here to see it.", and put its name in `ZDM_WA_TEMPLATE`.
 
 ## Connect a business

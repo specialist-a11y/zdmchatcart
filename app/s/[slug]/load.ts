@@ -34,7 +34,12 @@ export const loadShop = cache(async (slug: string) => {
     bestFor(business.id),
   ]);
   const live = typeof domain === "string" && domain ? domain : null;
-  return { business, products: products ?? [], best, domain: live, urls: shopUrls(slug, live) };
+  // Plan features the shop page needs (read with the server key).
+  const { getEntitlements } = await import("@/lib/entitlements");
+  const { has } = await import("@/lib/plan-features");
+  const ent = await getEntitlements(business.id).catch(() => null);
+  const features = { cartRecovery: !ent || has(ent, "cart_recovery") };
+  return { business, products: products ?? [], best, domain: live, urls: shopUrls(slug, live), features };
 });
 
 /** Bestsellers come from real paid orders in the last 30 days (server key only; orders are private). */

@@ -7,9 +7,10 @@
 export const FEATURES = [
   { key: "ig_autoreplies", label: "Instagram comment auto-replies (comment a keyword, get the link by DM)", from: "Growth" },
   { key: "cart_recovery", label: "Abandoned cart recovery and reminders", from: "Growth" },
+  { key: "wa_automations", label: "WhatsApp bot automation (answers to common questions, away message)", from: "Growth" },
   { key: "daily_summary", label: "Daily summary on WhatsApp", from: "Growth" },
   { key: "reporting", label: "Reporting and sales tips (what to push, what to drop, when to post)", from: "Pro" },
-  { key: "ai_assistant", label: "AI product assistant", from: "Pro" },
+  { key: "ai_assistant", label: "AI product assistant (answers product questions on WhatsApp)", from: "Pro" },
   { key: "broadcasts", label: "WhatsApp broadcasts", from: "Pro" },
   { key: "marketing_autopilot", label: "Marketing Autopilot (AI posts, scheduling, captions)", from: "All-in-One" },
   { key: "ads", label: "Retargeting ads on Instagram and Facebook", from: "All-in-One" },
@@ -28,7 +29,6 @@ export const CORE = [
   "Inbox for your WhatsApp chats",
   "Orders, customers and products",
   "Instagram and Facebook connected",
-  "Image posts made for you each month",
   "Short links, QR codes and which post made each sale",
 ];
 

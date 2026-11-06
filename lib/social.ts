@@ -38,9 +38,11 @@ export function readState(state: string, now = Date.now()): { slug: string; user
 }
 
 export function loginUrl(state: string) {
+  // Facebook Login for Business apps use a saved configuration (its permissions are picked in Meta) instead of a scope list.
+  const configId = process.env.META_LOGIN_CONFIG_ID?.trim();
   const q = new URLSearchParams({
-    client_id: process.env.META_APP_ID ?? "", redirect_uri: redirectUri(), state,
-    response_type: "code", scope: SOCIAL_SCOPES.join(","),
+    client_id: process.env.META_APP_ID ?? "", redirect_uri: redirectUri(), state, response_type: "code",
+    ...(configId ? { config_id: configId } : { scope: SOCIAL_SCOPES.join(",") }),
   });
   return `https://www.facebook.com/${ver()}/dialog/oauth?${q}`;
 }

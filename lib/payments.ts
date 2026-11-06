@@ -52,12 +52,12 @@ export async function sendFromBusiness(
   businessId: string,
   to: string,
   body: string,
-  refs: { customerId?: string | null; orderId?: string | null } = {},
+  refs: { customerId?: string | null; orderId?: string | null; sentBy?: "person" | "ai" } = {},
 ) {
   const wa = await getIntegration(admin, businessId, "whatsapp");
   if (!wa?.config.phone_number_id) return { ok: false, error: "WhatsApp not connected" };
   const res = await sendWhatsAppText({ phoneNumberId: wa.config.phone_number_id, accessToken: wa.secret, to, body });
-  await admin.from("messages").insert({
+  const row = {
     business_id: businessId,
     customer_id: refs.customerId ?? null,
     order_id: refs.orderId ?? null,
@@ -65,7 +65,10 @@ export async function sendFromBusiness(
     direction: "out",
     body,
     external_id: res.id ?? null,
-  });
+  };
+  // sent_by (migration 0024) tells the AI assistant a person is talking; logged without it before then.
+  const { error } = await admin.from("messages").insert((refs.sentBy ? { ...row, sent_by: refs.sentBy } : row) as typeof row);
+  if (error && refs.sentBy) await admin.from("messages").insert(row);
   return res;
 }
 

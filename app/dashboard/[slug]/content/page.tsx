@@ -1,3 +1,5 @@
+import { getEntitlements } from "@/lib/entitlements";
+import { has } from "@/lib/plan-features";
 import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import { requireMembership } from "@/lib/business";
@@ -15,8 +17,10 @@ const STATUS: Record<string, [string, string]> = {
 export default async function ContentPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ tab?: string }> }) {
   const { slug } = await params;
   const { tab: tabParam } = await searchParams;
-  const { supabase, business, role } = await requireMembership(slug);
+  const { supabase, business, role, viewingAsStaff } = await requireMembership(slug);
   const canPost = role === "owner" || role === "admin";
+  // Building and scheduling your own posts (and AI captions) is Marketing Autopilot, on All-in-One.
+  const autopilot = viewingAsStaff || has(await getEntitlements(business.id), "marketing_autopilot");
   const [{ data: rows }, { data: sub }, { data: conn }, { data: upcoming }, { data: recent }, { data: shootRows }, { data: used }] = await Promise.all([
     supabase.from("video_clips").select("id, kind, source, shoot_id, title, caption, seconds, storage_path, thumb_path, width, height, chosen, skipped, created_at, video_shoots(month)")
       .eq("business_id", business.id).eq("status", "published").order("created_at", { ascending: false }).limit(200),
@@ -120,7 +124,7 @@ export default async function ContentPage({ params, searchParams }: { params: Pr
         </section>
       </div>
 
-      <ContentStudio slug={slug} items={items} conn={connection} canPost={canPost} />
+      <ContentStudio slug={slug} items={items} conn={connection} canPost={canPost} autopilot={autopilot} />
       </>}
     </div>
   );

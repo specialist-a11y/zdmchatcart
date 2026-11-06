@@ -1,3 +1,5 @@
+import { getEntitlements } from "@/lib/entitlements";
+import { has } from "@/lib/plan-features";
 import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import Link from "next/link";
@@ -116,6 +118,7 @@ export default async function SettingsPage({ params, searchParams }: {
     redirect(`${path}?msg=${encodeURIComponent(error ? "Run supabase/migrations/0015_priority_features.sql first" : "Notifications saved")}#notify`);
   }
   const { data: notify } = await supabase.from("businesses").select("daily_summary").eq("id", business.id).maybeSingle();
+  const summaryOn = has(await getEntitlements(business.id), "daily_summary");
 
   const cfg = (i?: { config: any }) => (i?.config ?? {}) as Record<string, string>;
   // Ask Meta whether the saved tokens still work, and when they stop.
@@ -146,10 +149,10 @@ export default async function SettingsPage({ params, searchParams }: {
     { name: "Payments (Fygaro)", state: fygaro?.status === "connected" ? "ok" : "off",
       detail: fygaro?.status === "connected" ? (lastPay?.paid_at ? `Working. Last online payment ${sinceText(lastPay.paid_at)}.` : "Connected. No online payments yet.") : "Not set up. ZDMINC connects this for you." },
     { name: "WhatsApp", state: whatsapp?.status !== "connected" ? "off" : st("whatsapp")?.state === "expired" ? "bad" : st("whatsapp")?.state === "soon" ? "warn" : "ok",
-      detail: whatsapp?.status !== "connected" ? "Not connected." : `${st("whatsapp")?.label ?? "Connected"}.${lastWa?.created_at ? ` Last customer message ${sinceText(lastWa.created_at)}.` : ""}`,
+      detail: whatsapp?.status !== "connected" ? "Not connected." : `${st("whatsapp")?.state && st("whatsapp")?.state !== "unknown" ? st("whatsapp")?.label : "Connected"}.${lastWa?.created_at ? ` Last customer message ${sinceText(lastWa.created_at)}.` : ""}`,
       fix: st("whatsapp")?.state === "expired" || st("whatsapp")?.state === "soon" ? { href: `/dashboard/${slug}/support?t=new&subject=${encodeURIComponent("WhatsApp needs reconnecting")}`, label: "Ask ZDMINC" } : undefined },
     { name: "Instagram and Facebook", state: !social ? "off" : st("instagram")?.state === "expired" ? "bad" : st("instagram")?.state === "soon" ? "warn" : "ok",
-      detail: !social ? "Not connected." : `${sc.ig_username ? `@${sc.ig_username}. ` : ""}${st("instagram")?.label ?? "Connected"}.`,
+      detail: !social ? "Not connected." : `${sc.ig_username ? `@${sc.ig_username}. ` : ""}${st("instagram")?.state && st("instagram")?.state !== "unknown" ? st("instagram")?.label : "Connected"}.`,
       fix: !social || st("instagram")?.state === "expired" || st("instagram")?.state === "soon" ? { href: `/api/social/connect?slug=${slug}`, label: social ? "Reconnect" : "Connect" } : undefined },
     { name: "Your own domain", state: domain?.status === "active" ? "ok" : domain ? "warn" : "off",
       detail: domain?.status === "active" ? `${domain.domain} is live.` : domain ? `${domain.domain} is waiting for its DNS settings.` : "Optional. Your shop works on the ZDM ChatCart link.",
@@ -269,9 +272,10 @@ export default async function SettingsPage({ params, searchParams }: {
       <form id="notify" action={saveNotify} className="card stack" style={{ gap: 8 }}>
         <h2 style={{ fontSize: 22 }}>WhatsApp messages to you</h2>
         <label className="row" style={{ flexDirection: "row", gap: 8, fontWeight: 600 }}>
-          <input type="checkbox" name="daily_summary" defaultChecked={notify?.daily_summary ?? true} disabled={!isAdmin} style={{ width: 20, height: 20 }} />
+          <input type="checkbox" name="daily_summary" defaultChecked={summaryOn && (notify?.daily_summary ?? true)} disabled={!isAdmin || !summaryOn} style={{ width: 20, height: 20 }} />
           Daily summary each morning: yesterday's sales, unpaid orders and chats waiting
         </label>
+        {!summaryOn && <span style={{ fontSize: 14 }}>The daily summary comes with <b>Growth and up</b>. <Link href={`/dashboard/${slug}/billing`}>See plans</Link></span>}
         <span className="muted" style={{ fontSize: 13 }}>Sent from the ZDMINC WhatsApp number to the owner phone in Business info. Alerts about your ad wallet and connections always go out.</span>
         {isAdmin && <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>Save</button>}
       </form>

@@ -4,8 +4,10 @@ import { requireMembership } from "@/lib/business";
 import { PageHeader, Dot } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import { TEMPLATE_PARAMS, fillTemplate, templateValues } from "@/lib/journeys";
-import { addFaq, deleteFaq, deleteTemplate, saveAway, saveTemplate, setTemplateStatus, syncTemplates, toggleFaq } from "./actions";
+import { saveAssistant, addFaq, deleteFaq, deleteTemplate, saveAway, saveTemplate, setTemplateStatus, syncTemplates, toggleFaq } from "./actions";
 import { cleanHours, hasHours, hoursSummary, openState } from "@/lib/hours";
+import { getEntitlements } from "@/lib/entitlements";
+import { has } from "@/lib/plan-features";
 
 const LIVE = [
   ["Order codes", "When a customer sends a code like IC-1048, the bot replies with the order summary and a secure payment link for the exact total."],
@@ -33,6 +35,16 @@ export default async function WhatsAppPage({ params, searchParams }: { params: P
   if (lock) return lock;
   const { msg } = await searchParams;
   const { supabase, business, role, viewingAsStaff } = await requireMembership(slug);
+  const ent = await getEntitlements(business.id);
+  // Which bot features this plan includes (ZDMINC staff can set everything up).
+  const plan: Record<string, boolean> = {
+    "Unpaid cart reminder": viewingAsStaff || has(ent, "cart_recovery"),
+    "Answers and away message": viewingAsStaff || has(ent, "wa_automations"),
+  };
+  const botOn = plan["Answers and away message"];
+  const aiPlan = viewingAsStaff || has(ent, "ai_assistant");
+  const { data: aiRow } = await supabase.from("businesses").select("ai_assistant").eq("id", business.id).maybeSingle<any>();
+  const aiKey = !!process.env.ANTHROPIC_API_KEY;
   const [{ data: wa }, { data: templates, error: tErr }] = await Promise.all([
     supabase.from("integrations").select("status, config").eq("business_id", business.id).eq("provider", "whatsapp").maybeSingle(),
     supabase.from("message_templates").select("id, name, language, purpose, body, params, status, rejected_reason, updated_at").eq("business_id", business.id).order("purpose").order("name"),
@@ -59,7 +71,12 @@ export default async function WhatsAppPage({ params, searchParams }: { params: P
 
       <h2>What your bot does now</h2>
       <div className="grid">
-        {LIVE.map(([t, d]) => <div key={t} className="card stack" style={{ gap: 6 }}><span className="badge paid" style={{ alignSelf: "flex-start" }}>Live</span><b>{t}</b><span className="muted">{d}</span></div>)}
+        {LIVE.map(([t, d]) => {
+          const off = plan[t] === false;
+          return <div key={t} className="card stack" style={{ gap: 6, opacity: off ? 0.75 : 1 }}>
+            {off ? <Link className="badge high" style={{ alignSelf: "flex-start" }} href={`/dashboard/${slug}/billing`}>Growth and up</Link> : <span className="badge paid" style={{ alignSelf: "flex-start" }}>Live</span>}
+            <b>{t}</b><span className="muted">{d}</span></div>;
+        })}
       </div>
 
       <section id="automations" className="card stack">
@@ -67,6 +84,9 @@ export default async function WhatsAppPage({ params, searchParams }: { params: P
           <h2>Automations</h2>
           <p className="muted" style={{ margin: "4px 0 0" }}>Answers the bot sends for you. Order codes and payment links always come first.</p>
         </div>
+        {!botOn ? (
+          <p style={{ margin: 0 }}>Answers to common questions and an away message when you're closed come with <b>Growth and up</b>. <Link href={`/dashboard/${slug}/billing`}>See plans</Link></p>
+        ) : (<>
         {fErr && <p className="error" style={{ margin: 0 }}>Automations need a database update: run supabase/migrations/0015_priority_features.sql.</p>}
 
         <form action={saveAway} className="card stack" style={{ background: "#fafbfa", gap: 8 }}>
@@ -110,6 +130,22 @@ export default async function WhatsAppPage({ params, searchParams }: { params: P
             </form>
           )}
         </div>
+        </>)}
+      </section>
+
+      <section id="assistant" className="card stack">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2>AI product assistant</h2>
+          {aiPlan ? <span className={`badge ${aiRow?.ai_assistant === false || !aiKey ? "" : "paid"}`}>{!aiKey ? "Not switched on by ZDMINC yet" : aiRow?.ai_assistant === false ? "Off" : "On"}</span> : <Link className="badge high" href={`/dashboard/${slug}/billing`}>Pro and up</Link>}
+        </div>
+        <p className="muted" style={{ margin: 0 }}>Answers questions like &ldquo;how much is the black cake?&rdquo; or &ldquo;do you deliver to St Philip?&rdquo; any time, using only your products, prices, hours and delivery areas. If it doesn&apos;t know, it stays quiet and the chat waits for you in the Inbox. It also stays quiet for 2 hours after you reply to someone yourself.</p>
+        {aiPlan ? (
+          <form action={saveAssistant} className="row" style={{ gap: 10 }}>
+            <input type="hidden" name="slug" value={slug} />
+            <label className="row" style={{ gap: 6, flexDirection: "row", fontWeight: 600 }}><input type="checkbox" name="ai_assistant" defaultChecked={aiRow?.ai_assistant !== false} disabled={!canEdit} style={{ width: 20, height: 20 }} />Answer product questions for me</label>
+            {canEdit && <button className="btn secondary small">Save</button>}
+          </form>
+        ) : <p style={{ margin: 0 }}>Comes with <b>Pro and up</b>. <Link href={`/dashboard/${slug}/billing`}>See plans</Link></p>}
       </section>
 
       <section id="templates" className="card stack">

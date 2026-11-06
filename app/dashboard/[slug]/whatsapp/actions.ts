@@ -5,6 +5,15 @@ import { back, migrationHint, requireEditor, str } from "@/lib/crm-actions";
 import { TEMPLATE_PARAMS, placeholderCount } from "@/lib/journeys";
 import { getIntegration } from "@/lib/payments";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
+import { getEntitlements } from "@/lib/entitlements";
+import { has } from "@/lib/plan-features";
+
+/** FAQ answers and the away message come with Growth and up (staff viewing as the client can set them up). */
+async function requireBot(slug: string, businessId: string) {
+  const { requireMembership } = await import("@/lib/business");
+  const { viewingAsStaff } = await requireMembership(slug);
+  if (!viewingAsStaff && !has(await getEntitlements(businessId), "wa_automations")) back(`/dashboard/${slug}/whatsapp#automations`, "Answers and the away message come with Growth and up. See Plan and billing.");
+}
 
 const PURPOSES = ["cart_reminder", "win_back", "order_ready", "broadcast", "other"];
 const STATUSES = ["draft", "pending", "approved", "rejected", "paused"];
@@ -80,6 +89,7 @@ const needs0015 = (msg?: string) => (msg ? "This needs a database update: run su
 export async function saveAway(f: FormData) {
   const slug = str(f, "slug");
   const { db, business } = await requireEditor(slug, `/dashboard/${slug}/whatsapp`);
+  await requireBot(slug, business.id);
   const { error } = await db.from("businesses").update({ away_enabled: f.get("away_enabled") === "on", away_message: str(f, "away_message").slice(0, 600) || null }).eq("id", business.id);
   revalidatePath(`/dashboard/${slug}/whatsapp`);
   back(auto(slug), needs0015(error?.message) ?? (f.get("away_enabled") === "on" ? "Away message is on" : "Away message is off"));
@@ -88,6 +98,7 @@ export async function saveAway(f: FormData) {
 export async function addFaq(f: FormData) {
   const slug = str(f, "slug");
   const { db, business } = await requireEditor(slug, `/dashboard/${slug}/whatsapp`);
+  await requireBot(slug, business.id);
   const { splitKeywords } = await import("@/lib/hours");
   const keywords = splitKeywords(str(f, "keywords"));
   const answer = str(f, "answer").slice(0, 1000);
@@ -111,4 +122,17 @@ export async function deleteFaq(f: FormData) {
   await db.from("whatsapp_faqs").delete().eq("business_id", business.id).eq("id", str(f, "id"));
   revalidatePath(`/dashboard/${slug}/whatsapp`);
   back(auto(slug), "Answer removed");
+}
+
+/** AI product assistant on or off (Pro and up). */
+export async function saveAssistant(f: FormData) {
+  const slug = str(f, "slug");
+  const { db, business } = await requireEditor(slug, `/dashboard/${slug}/whatsapp`);
+  const { requireMembership } = await import("@/lib/business");
+  const { viewingAsStaff } = await requireMembership(slug);
+  if (!viewingAsStaff && !has(await getEntitlements(business.id), "ai_assistant")) back(`/dashboard/${slug}/whatsapp#assistant`, "The AI product assistant comes with Pro and up. See Plan and billing.");
+  const on = f.get("ai_assistant") === "on";
+  const { error } = await db.from("businesses").update({ ai_assistant: on }).eq("id", business.id);
+  revalidatePath(`/dashboard/${slug}/whatsapp`);
+  back(`/dashboard/${slug}/whatsapp#assistant`, error ? "This needs a database update: run supabase/migrations/0024_plan_limits_ai_assistant.sql." : on ? "The AI assistant is on" : "The AI assistant is off");
 }

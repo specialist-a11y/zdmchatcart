@@ -6,6 +6,11 @@ import { requireMembership } from "@/lib/business";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { checkPost, ratioOf, type MediaKind, type Platform } from "@/lib/posts";
 import { autoCaption, captionFor, captionsEnabled } from "@/lib/captions";
+import { hasFeature } from "@/lib/entitlements";
+
+/** AI captions are part of Marketing Autopilot (All-in-One plans). */
+const aiOn = async (businessId: string) => captionsEnabled() && (await hasFeature(businessId, "marketing_autopilot"));
+const AI_LOCKED = "AI captions come with Marketing Autopilot on All-in-One. See Plan and billing.";
 import { runDuePosts } from "@/lib/publish";
 
 const safeName = (n: string) => n.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 80) || "file";
@@ -41,7 +46,7 @@ export async function registerContent(slug: string, input: {
   }).select("id").single();
   if (error) return { error: error.message };
   // Write the caption in the background so the upload finishes straight away.
-  if (captionsEnabled()) after(() => autoCaption(client, [data.id]).then(() => revalidatePath(page(slug))));
+  if (await aiOn(business.id)) after(() => autoCaption(client, [data.id]).then(() => revalidatePath(page(slug))));
   revalidatePath(page(slug));
   return { ok: true };
 }
@@ -50,6 +55,7 @@ export async function registerContent(slug: string, input: {
 export async function suggestCaption(slug: string, mediaIds: string[]) {
   const { supabase, business } = await requireMembership(slug);
   if (!captionsEnabled()) return { error: "AI captions aren't switched on yet (ANTHROPIC_API_KEY is missing)." };
+  if (!(await hasFeature(business.id, "marketing_autopilot"))) return { error: AI_LOCKED };
   const client = db(supabase);
   const { data } = await client.from("video_clips").select("id, kind, title, storage_path, thumb_path").eq("business_id", business.id).in("id", mediaIds.slice(0, 10));
   const order = new Map(mediaIds.map((id, i) => [id, i]));
@@ -63,6 +69,7 @@ export async function suggestCaption(slug: string, mediaIds: string[]) {
 export async function captionClip(slug: string, id: string) {
   const { supabase, business } = await requireMembership(slug);
   if (!captionsEnabled()) return { error: "AI captions aren't switched on yet (ANTHROPIC_API_KEY is missing)." };
+  if (!(await hasFeature(business.id, "marketing_autopilot"))) return { error: AI_LOCKED };
   const client = db(supabase);
   const { data: clip } = await client.from("video_clips").select("id, kind, title, storage_path, thumb_path").eq("id", id).eq("business_id", business.id).maybeSingle();
   if (!clip) return { error: "Not found" };
@@ -100,6 +107,7 @@ export async function toggleClip(slug: string, id: string, chosen: boolean) {
 export async function schedulePost(slug: string, input: { mediaIds: string[]; platforms: Platform[]; caption: string; when: string; now: boolean }) {
   const { supabase, business, user, role, viewingAsStaff } = await requireMembership(slug);
   if (!canPost(role)) return { error: "Only owners and admins can schedule posts." };
+  if (!viewingAsStaff && !(await hasFeature(business.id, "marketing_autopilot"))) return { error: "Scheduling your own posts comes with Marketing Autopilot on All-in-One. See Plan and billing." };
   const admin = db(supabase);
   const ids = [...new Set(input.mediaIds)];
   const { data: rows } = await admin.from("video_clips").select("id, kind, status, width, height").eq("business_id", business.id).in("id", ids);
@@ -187,8 +195,8 @@ export async function sendChosenToCalendar(slug: string, input: { clipIds: strin
   const todo = (clips ?? []).filter((c) => c.status === "published" && c.chosen && !already.has(c.id)).sort((a, b) => order.get(a.id)! - order.get(b.id)!);
   if (!todo.length) return { error: "Those videos are already on the calendar." };
 
-  // Clips without a caption get one written now, and it's saved on the clip too.
-  if (captionsEnabled()) {
+  // Clips without a caption get one written now, and it's saved on the clip too (Marketing Autopilot).
+  if (await aiOn(business.id)) {
     await Promise.all(todo.filter((c) => !c.caption?.trim()).map(async (c) => {
       c.caption = await captionFor(admin, business.id, [c]);
       if (c.caption) await admin.from("video_clips").update({ caption: c.caption }).eq("id", c.id);

@@ -57,7 +57,7 @@ export default async function ProductPage({ params, searchParams }: Props) {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: ldJson(ld) }} />
       <ShopClient business={b} products={data.products as any} attribution={ref ?? null} openNow={open.label ? open : null} best={data.best}
-        basePath={base} initialFocus={p.id} />
+        basePath={base} initialFocus={p.id} cartRecovery={data.features.cartRecovery} />
     </>
   );
 }

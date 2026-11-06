@@ -10,6 +10,9 @@ import { setConsent, upsertCustomer } from "@/lib/customers";
 import { consentCommand, startReply, stopReply } from "@/lib/journeys";
 import { awayDue, awayText, cleanHours, matchFaq, openState } from "@/lib/hours";
 import { recordZdmInbound } from "@/lib/zdm-whatsapp";
+import { hasFeature } from "@/lib/entitlements";
+import { answerCustomer, assistantAvailable } from "@/lib/assistant";
+import { AI_DAILY_LIMIT, looksLikeQuestion, PERSON_QUIET_HOURS } from "@/lib/assistant-text";
 
 /** Meta webhook verification handshake. */
 export async function GET(req: NextRequest) {
@@ -181,8 +184,9 @@ export async function POST(req: Request) {
       }
     }
 
-    // Automations (migration 0015): FAQ keyword answers, then the away message when closed.
-    if (!reply && !code) {
+    // Automations (migration 0015): FAQ keyword answers, then the away message when closed. Growth and up.
+    const bot = !reply && !code ? await hasFeature(businessId, "wa_automations", admin) : false;
+    if (bot) {
       const { data: faqs } = await admin.from("whatsapp_faqs").select("id, keywords, answer, active, hits").eq("business_id", businessId).eq("active", true);
       const faq = matchFaq(msg.text, (faqs ?? []) as any);
       if (faq) {
@@ -191,7 +195,7 @@ export async function POST(req: Request) {
       }
     }
     let biz: any = null;
-    if (!reply && !code) {
+    if (bot && !reply) {
       const { data } = await admin.from("businesses").select("slug, name, hours, away_enabled, away_message, closed_until, closed_note").eq("id", businessId).maybeSingle();
       biz = data;
       const state = biz ? openState(cleanHours(biz.hours), { closedUntil: biz.closed_until, closedNote: biz.closed_note }) : null;
@@ -204,13 +208,30 @@ export async function POST(req: Request) {
       }
     }
 
+    // AI product assistant (Pro and up): answers product questions from the shop's own data, or stays quiet.
+    let sentBy: "ai" | undefined;
+    if (!reply && !code && customerId && !msg.media && assistantAvailable() && looksLikeQuestion(msg.text) && await hasFeature(businessId, "ai_assistant", admin)) {
+      const { data: setting } = await admin.from("businesses").select("ai_assistant").eq("id", businessId).maybeSingle<any>();
+      const since = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
+      const [{ count: person, error: sbErr }, { count: aiToday }] = await Promise.all([
+        admin.from("messages").select("id", { count: "exact", head: true }).eq("customer_id", customerId).eq("sent_by", "person").gte("created_at", since(PERSON_QUIET_HOURS)),
+        admin.from("messages").select("id", { count: "exact", head: true }).eq("customer_id", customerId).eq("sent_by", "ai").gte("created_at", since(24)),
+      ]);
+      // Off if the owner switched it off, a person replied recently, it has answered enough today, or before migration 0024.
+      if (!sbErr && setting?.ai_assistant !== false && !person && (aiToday ?? 0) < AI_DAILY_LIMIT) {
+        const { data: history } = await admin.from("messages").select("direction, body").eq("customer_id", customerId).order("created_at", { ascending: false }).limit(7);
+        const answer = await answerCustomer(admin, businessId, msg.text, (history ?? []).slice(1).reverse());
+        if (answer) { reply = answer; sentBy = "ai"; }
+      }
+    }
+
     // Only greet first-time chatters; everything else waits for a human in the inbox.
     if (!reply && !code && (priorInbound ?? 0) === 0) {
       if (!biz) biz = (await admin.from("businesses").select("slug").eq("id", businessId).single()).data;
       reply = `Hi${msg.name ? " " + msg.name.split(" ")[0] : ""}! Browse and order here: ${site}/s/${biz?.slug}\nA team member will also reply soon.`;
     }
 
-    if (reply) await sendFromBusiness(admin, businessId, msg.from, reply, { customerId, orderId });
+    if (reply) await sendFromBusiness(admin, businessId, msg.from, reply, { customerId, orderId, sentBy });
   }
 
   return NextResponse.json({ ok: true });

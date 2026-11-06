@@ -49,7 +49,8 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme, basePath, initialFocus, today }: {
+export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme, basePath, initialFocus, today, cartRecovery = true }: {
+  cartRecovery?: boolean;
   today?: string;
   basePath?: string;
   initialFocus?: string | null;
@@ -675,10 +676,12 @@ export default function ShopClient({ business, products, attribution, previewTem
                 <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
                 <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="Optional" /></label>
               </div>
-              <label className="s-check">
-                <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
-                Send me a WhatsApp reminder if I don&apos;t finish
-              </label>
+              {cartRecovery && (
+                <label className="s-check">
+                  <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
+                  Send me a WhatsApp reminder if I don&apos;t finish
+                </label>
+              )}
               <label className="s-check">
                 <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
                 Tell me about {business.name}&apos;s specials on WhatsApp
