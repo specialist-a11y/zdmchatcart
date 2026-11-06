@@ -8,13 +8,15 @@ import { CORE, entitlementsFrom, featureLabel, firstInvoice } from "@/lib/plan-f
 import { todayIn } from "@/lib/billing";
 import { money } from "@/lib/staff";
 import { SignupEmail } from "./SignupEmail";
+import { SignupForm } from "./SignupForm";
+import { shopAddress } from "@/lib/signup";
 
 export const metadata = { title: "Sign up · ZDM ChatCart" };
 
 const Form = z.object({
   plan: z.string().min(2),
   name: z.string().min(2, "Add your business name").max(80),
-  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,40}$/, "Shop address: lowercase letters, numbers and dashes"),
+  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{1,40}$/, "Shop address: at least 2 letters or numbers"),
   prefix: z.string().regex(/^[A-Z]{1,4}$/, "Order code prefix: 1 to 4 letters"),
   whatsapp: z.string().regex(/^\d{7,15}$/, "WhatsApp number: digits with the country code, e.g. 1 246 555 1234"),
   contact_name: z.string().min(2, "Add your name").max(80),
@@ -24,9 +26,13 @@ async function signUp(f: FormData) {
   "use server";
   const get = (k: string) => String(f.get(k) ?? "").trim();
   const plan = get("plan");
-  const back = (msg: string): never => redirect(`/signup?plan=${encodeURIComponent(plan)}&error=${encodeURIComponent(msg)}`);
+  // Spaces, capitals and symbols in the shop address are fixed here, not sent back as an error.
+  const slug = shopAddress(get("slug") || get("name"));
+  // On an error, the form comes back filled in (the WhatsApp number isn't put in the link).
+  const keep = new URLSearchParams({ contact_name: get("contact_name"), name: get("name"), slug, prefix: get("prefix").toUpperCase() });
+  const back = (msg: string): never => redirect(`/signup?plan=${encodeURIComponent(plan)}&error=${encodeURIComponent(msg)}&${keep}#details`);
   const parsed = Form.safeParse({
-    plan, name: get("name"), slug: get("slug").toLowerCase(), prefix: get("prefix").toUpperCase(),
+    plan, name: get("name"), slug, prefix: get("prefix").toUpperCase().replace(/[^A-Z]/g, ""),
     whatsapp: get("whatsapp").replace(/\D/g, ""), contact_name: get("contact_name"),
   });
   if (!parsed.success) back(parsed.error.issues[0].message);
@@ -51,7 +57,7 @@ async function signUp(f: FormData) {
   redirect(`/dashboard/${v.slug}/billing?welcome=1`);
 }
 
-export default async function SignupPage({ searchParams }: { searchParams: Promise<{ plan?: string; error?: string }> }) {
+export default async function SignupPage({ searchParams }: { searchParams: Promise<{ plan?: string; error?: string; contact_name?: string; name?: string; slug?: string; prefix?: string }> }) {
   const sp = await searchParams;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -93,18 +99,12 @@ export default async function SignupPage({ searchParams }: { searchParams: Promi
 
       {chosen && (
         user ? (
-          <form action={signUp} className="card stack" style={{ maxWidth: 620 }}>
-            <h2>Your business</h2>
-            <input type="hidden" name="plan" value={chosen.id} />
-            <label>Your name<input name="contact_name" required defaultValue={(user.user_metadata as any)?.full_name ?? ""} /></label>
-            <label>Business name<input name="name" required placeholder="Island Crumb Bakery" /></label>
-            <label>Shop address (letters, numbers and dashes)<input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,40}" placeholder="island-crumb-bakery" /></label>
-            <label>Order code prefix (1 to 4 letters, e.g. IC for IC-1048)<input name="prefix" required pattern="[A-Za-z]{1,4}" placeholder="IC" /></label>
-            <label>WhatsApp number for orders (with country code)<input name="whatsapp" required inputMode="tel" placeholder="1 246 555 1234" /></label>
-            <p className="muted" style={{ margin: 0 }}>Signed in as {user.email}. Next you'll see your setup invoice: {money(Number(chosen.setup_fee) + Number(chosen.monthly_price))} ({money(chosen.setup_fee)} setup + first month), payable by card or bank transfer.</p>
-            {sp.error && <p className="error">{sp.error}</p>}
-            <button className="btn blue" style={{ alignSelf: "flex-start" }}>Create my account</button>
-          </form>
+          <div id="details">
+            <SignupForm action={signUp} plan={chosen.id} error={sp.error}
+              site={(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/^https?:\/\//, "").replace(/\/$/, "")}
+              defaults={{ contact_name: sp.contact_name ?? (user.user_metadata as any)?.full_name ?? "", name: sp.name ?? "", slug: sp.slug ?? "", prefix: sp.prefix ?? "", whatsapp: "" }}
+              note={`Signed in as ${user.email}. Next you'll see your setup invoice: ${money(Number(chosen.setup_fee) + Number(chosen.monthly_price))} (${money(chosen.setup_fee)} setup + first month), payable by card or bank transfer.`} />
+          </div>
         ) : <SignupEmail plan={chosen.id} planName={chosen.name} />
       )}
     </main>
