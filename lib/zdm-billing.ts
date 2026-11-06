@@ -228,4 +228,4 @@ export async function zdmBankDetails(admin: Admin) {
 }
 
 /** Line added to invoice messages so clients know they can pay by bank transfer too. */
-export const TRANSFER_HINT = " Or pay by bank transfer (1st Pay or any bank): the details are in Plan and billing.";
+export const TRANSFER_HINT = " You can pay by bank transfer (1st Pay or CIBC): the details are in Plan and billing.";

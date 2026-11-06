@@ -161,8 +161,8 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
         </form>
         <form action={saveZdmBank} className="card stack">
           <h2>ZDMINC bank details</h2>
-          <p className="muted" style={{ margin: 0 }}>Shown to clients on open invoices so they can pay by 1st Pay or any bank transfer, with the invoice number as the reference. {bankOn ? "On." : "Off until you add them."}</p>
-          <textarea name="bank_details" rows={5} defaultValue={bank?.value ?? ""} disabled={!manager} placeholder={"Bank: CIBC Caribbean\nAccount name: ZDMINC\nAccount number: ...\nBranch / transit: ..."} />
+          <p className="muted" style={{ margin: 0 }}>Shown to clients on open invoices so they can pay by 1st Pay or CIBC bank transfer, with the invoice number as the reference. While card payment isn't set up, this is how clients pay. {bankOn ? "On." : "Off until you add them."}</p>
+          <textarea name="bank_details" rows={5} defaultValue={bank?.value ?? ""} disabled={!manager} placeholder={"Bank: CIBC Caribbean\nAccount name: ZDMINC\nAccount number: ...\nBranch / transit: ...\n1st Pay: ..."} />
           {manager && <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>Save bank details</button>}
         </form>
       </div>

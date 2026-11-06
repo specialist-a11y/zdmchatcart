@@ -5,7 +5,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { money } from "@/lib/staff";
 import { contactOverage, previewChange, todayIn } from "@/lib/billing";
 import { payInvoice, requestPlanChange, saveBillingDetails, submitInvoiceTransfer } from "./actions";
-import { zdmBankDetails } from "@/lib/zdm-billing";
+import { zdmBankDetails, zdmFygaro } from "@/lib/zdm-billing";
 import { CORE, featureLabel, entitlementsFrom } from "@/lib/plan-features";
 
 const pct = (a: number, b: number) => (b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0);
@@ -47,6 +47,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
   const lite = (p: any) => ({ id: p.id, name: p.name, monthly_price: Number(p.monthly_price), rank: p.rank });
   const today = todayIn();
   const bank = await zdmBankDetails(admin);
+  const cardOn = !!zdmFygaro();
   const pendingStart = sub?.status === "pending_payment";
   const checking = open.filter((i) => i.transfer_submitted_at);
   const toPay = open.filter((i) => !i.transfer_submitted_at);
@@ -54,7 +55,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
   return (
     <div className="stack">
       <PageHeader n={num("billing")} title="Plan and billing" sub="Your ZDM ChatCart plan, invoices from ZDMINC, and who we bill." />
-      {msg && <p className="ok">{msg}</p>}
+      {msg && <p className={/isn't|Add the|Send a|not/i.test(msg) ? "error" : "ok"}>{msg}</p>}
 
       {welcome && pendingStart && (
         <div className="card stack" style={{ background: "var(--teal-soft)" }}>
@@ -73,11 +74,13 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
         <section className="card stack" style={{ background: toPay.some((i) => i.status === "overdue") ? "#fbe3dc" : "#fff8ec" }}>
           <div className="row" style={{ justifyContent: "space-between" }}>
             <span><strong>{toPay.length === 1 ? `Invoice ${toPay[0].number} is ${toPay[0].status === "overdue" ? "overdue" : "due"}` : `${toPay.length} invoices to pay`}</strong> · {money(toPay.reduce((n, i) => n + Number(i.amount), 0))}{toPay.length === 1 ? <span className="muted"> · {toPay[0].description}</span> : null}</span>
-            <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={toPay[0].number} /><button className="btn blue small">Pay {toPay.length === 1 ? "by card" : `${toPay[0].number} by card`}</button></form>
+            {(cardOn || toPay[0].payment_url) && <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={toPay[0].number} /><button className="btn blue small">Pay {toPay.length === 1 ? "by card" : `${toPay[0].number} by card`}</button></form>}
           </div>
+          {!bank && !cardOn && !toPay[0].payment_url && <p className="muted" style={{ margin: 0 }}>ZDMINC will send you payment details for this invoice on WhatsApp.</p>}
           {bank && (
-            <details>
-              <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Pay by bank transfer (1st Pay or any bank)</summary>
+            // Open straight away while card payment isn't set up: transfer is the way to pay.
+            <details open={!cardOn && !toPay[0].payment_url}>
+              <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Pay by bank transfer (1st Pay or CIBC)</summary>
               <div className="cols" style={{ marginTop: 10 }}>
                 <div className="stack" style={{ gap: 6 }}>
                   <span className="muted">Send exactly {money(toPay[0].amount)} to:</span>
@@ -100,7 +103,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
 
       <div className="cols">
         <section className="card stack">
-          <div className="row" style={{ justifyContent: "space-between" }}><h2>Your plan</h2><span className={`badge ${sub?.status === "active" ? "paid" : sub?.status ?? ""}`}>{sub?.status === "past_due" ? "Payment overdue" : sub?.status ?? "setting up"}</span></div>
+          <div className="row" style={{ justifyContent: "space-between" }}><h2>Your plan</h2><span className={`badge ${sub?.status === "active" ? "paid" : sub?.status ?? ""}`}>{({ past_due: "Payment overdue", pending_payment: "Waiting for first payment", active: "Active", trial: "Trial", paused: "Paused", cancelled: "Cancelled" } as Record<string, string>)[sub?.status ?? ""] ?? "Setting up"}</span></div>
           {current && sub ? (
             <>
               <div><strong style={{ fontSize: 24 }}>{current.name}</strong><br /><span className="muted">{money(current.monthly_price)} a month · renews {sub.current_period_end}</span></div>
@@ -207,7 +210,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
           </tbody>
         </table>
       </div>
-      <p className="muted" style={{ margin: 0 }}>Pay by card through Fygaro{bank ? " or by bank transfer (1st Pay or any bank)" : ""}. Questions about a charge? Open a request in Help and support.</p>
+      <p className="muted" style={{ margin: 0 }}>{cardOn ? `Pay by card through Fygaro${bank ? " or by bank transfer (1st Pay or CIBC)" : ""}.` : bank ? "Pay by bank transfer (1st Pay or CIBC). Card payment is coming soon." : "ZDMINC sends payment details on WhatsApp."} Questions about a charge? Open a request in Help and support.</p>
     </div>
   );
 }
