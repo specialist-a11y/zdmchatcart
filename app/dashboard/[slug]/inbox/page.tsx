@@ -1,3 +1,4 @@
+import { gateSection } from "@/components/PlanLock";
 import Link from "next/link";
 import { requireMembership } from "@/lib/business";
 import { insideServiceWindow } from "@/lib/whatsapp";
@@ -48,6 +49,8 @@ async function removeQuickReply(f: FormData) {
 
 export default async function InboxPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ c?: string; msg?: string; f?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "inbox");
+  if (lock) return lock;
   const sp = await searchParams;
   const filter = ["waiting", "whatsapp", "instagram"].includes(sp.f ?? "") ? sp.f! : "all";
   const { supabase, business, role } = await requireMembership(slug);

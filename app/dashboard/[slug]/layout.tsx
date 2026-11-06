@@ -4,6 +4,8 @@ import { CLIENT_NAV } from "@/lib/crm-nav";
 import { CrmShell, Dot } from "@/components/CrmShell";
 import { Icon } from "@/components/Icon";
 import { getStaff } from "@/lib/staff";
+import { getEntitlements } from "@/lib/entitlements";
+import { sectionOpen } from "@/lib/plan-features";
 
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
@@ -14,13 +16,15 @@ export default async function BusinessLayout({ children, params }: { children: R
   const week = new Date(Date.now() - 7 * 864e5).toISOString();
   const [{ data: msgs }, { count: toAct }, { count: adsOk }, { count: toChoose }, { data: integ }, { data: sub }, staff] = await Promise.all([
     supabase.from("messages").select("customer_id, direction, created_at").eq("business_id", business.id).gte("created_at", week).order("created_at", { ascending: false }).limit(400),
-    supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).in("status", ["awaiting_confirmation", "awaiting_payment"]),
+    supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).in("status", ["awaiting_confirmation", "awaiting_payment", "transfer_pending"]),
     supabase.from("ad_campaigns").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "needs_approval"),
     supabase.from("video_clips").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("status", "published").eq("chosen", false),
     supabase.from("integrations").select("provider, status").eq("business_id", business.id),
     supabase.from("subscriptions").select("plans!subscriptions_plan_id_fkey(name)").eq("business_id", business.id).maybeSingle(),
     getStaff(),
   ]);
+  const ent = await getEntitlements(business.id);
+  const lockLabel = ent.live ? "Upgrade" : ent.status === "pending_payment" ? "After setup" : "Paused";
   // A chat is "waiting" when the customer wrote last.
   const latest = new Map<string, string>();
   for (const m of msgs ?? []) if (m.customer_id && !latest.has(m.customer_id)) latest.set(m.customer_id, m.direction);
@@ -31,7 +35,7 @@ export default async function BusinessLayout({ children, params }: { children: R
   return (
     <CrmShell
       switcher={{ initials: initials(business.name), name: business.name, sub: (sub as any)?.plans?.name ?? "ZDM ChatCart", href: "/dashboard" }}
-      nav={CLIENT_NAV.map(([k, label, icon]) => ({ href: k ? `${base}/${k}` : base, label, icon, badge: badge[k] || null, exact: !k }))}
+      nav={CLIENT_NAV.map(([k, label, icon]) => ({ href: k ? `${base}/${k}` : base, label, icon, badge: badge[k] || null, exact: !k, locked: sectionOpen(ent, k) ? null : lockLabel }))}
       footer={<>
         <div className="crm-conn">
           <span><Dot ok={on("whatsapp")} />WhatsApp {on("whatsapp") ? "connected" : "not connected"}</span>
@@ -42,6 +46,8 @@ export default async function BusinessLayout({ children, params }: { children: R
         {staff && <Link href="/admin" className="crm-outline"><Icon name="studio" />ZDMINC Studio</Link>}
       </>}
     >
+      {ent.status === "pending_payment" && <div className="notice" style={{ borderRadius: 12 }}>Welcome to ZDM ChatCart on {ent.planName}. Pay your setup invoice to start: ZDMINC then sets up your payments, WhatsApp and Instagram. <Link href={`${base}/billing`}>Pay now</Link></div>}
+      {(ent.status === "paused" || ent.status === "cancelled") && <div className="notice" style={{ borderRadius: 12 }}>Your account is {ent.status}. <Link href={`${base}/billing`}>Plan and billing</Link></div>}
       {viewingAsStaff && <div className="notice" style={{ borderRadius: 12 }}>You're viewing {business.name} as ZDMINC staff. Changes you make here are real. <Link href="/admin">Back to admin</Link></div>}
       {children}
     </CrmShell>

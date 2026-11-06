@@ -3,23 +3,6 @@ import { redirect } from "next/navigation";
 import { signOut } from "@/app/auth/actions";
 import { createClient } from "@/lib/supabase/server";
 
-async function createBusiness(formData: FormData) {
-  "use server";
-  const supabase = await createClient();
-  const name = String(formData.get("name") ?? "").trim();
-  const slug = String(formData.get("slug") ?? "").trim().toLowerCase();
-  const prefix = String(formData.get("prefix") ?? "").trim().toUpperCase();
-  const whatsapp = String(formData.get("whatsapp") ?? "");
-  const { error } = await supabase.rpc("create_business", {
-    p_name: name,
-    p_slug: slug,
-    p_prefix: prefix,
-    p_whatsapp: whatsapp,
-  });
-  if (error) redirect(`/dashboard?error=${encodeURIComponent(error.message)}`);
-  redirect(`/dashboard/${slug}`);
-}
-
 export default async function Dashboard({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
   const supabase = await createClient();
@@ -47,27 +30,15 @@ export default async function Dashboard({ searchParams }: { searchParams: Promis
           ))}
         </div>
       ) : (
-        <p className="muted">No businesses yet. Create your first one below.</p>
+        <p className="muted">No businesses yet. <Link href="/signup">Pick a plan to get started</Link>.</p>
       )}
 
-      <form action={createBusiness} className="card stack">
+      <div className="card stack">
         <h2 style={{ fontSize: 24 }}>Add a business</h2>
-        <label>Business name<input name="name" required placeholder="Island Crumb Bakery" /></label>
-        <label>
-          Shop address (letters, numbers and dashes)
-          <input name="slug" required pattern="[a-z0-9][a-z0-9-]{1,40}" placeholder="island-crumb-bakery" />
-        </label>
-        <label>
-          Order code prefix (1 to 4 capital letters)
-          <input name="prefix" required pattern="[A-Za-z]{1,4}" placeholder="ZB" />
-        </label>
-        <label>
-          WhatsApp number customers message (with country code)
-          <input name="whatsapp" placeholder="1 246 555 1234" />
-        </label>
-        <button className="btn">Create business</button>
+        <p className="muted" style={{ margin: 0 }}>Pick a plan, add your business details, then pay the setup invoice by card or bank transfer.</p>
+        <Link href="/signup" className="btn" style={{ alignSelf: "flex-start" }}>Choose a plan</Link>
         {error && <p className="error">{error}</p>}
-      </form>
+      </div>
     </main>
   );
 }

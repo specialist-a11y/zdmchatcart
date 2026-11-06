@@ -42,13 +42,13 @@ export async function walletBalance(admin: Admin, businessId: string) {
   return round2((data ?? []).reduce((n, e) => n + Number(e.amount), 0));
 }
 
-export async function createInvoice(admin: Admin, opts: { businessId: string; description: string; amount: number; dueDate: string; currency?: string; kind?: "subscription" | "ad_topup" | "other" }) {
+export async function createInvoice(admin: Admin, opts: { businessId: string; description: string; amount: number; dueDate: string; currency?: string; kind?: "subscription" | "ad_topup" | "other"; isFirst?: boolean }) {
   const { data: number, error: numErr } = await admin.rpc("next_invoice_number");
   if (numErr || !number) throw new Error(numErr?.message ?? "could not number invoice");
   const amount = round2(opts.amount);
   const { data: inv, error } = await admin
     .from("invoices")
-    .insert({ business_id: opts.businessId, number, description: opts.description, amount, currency: opts.currency ?? "BBD", due_date: opts.dueDate, status: "sent", kind: opts.kind ?? "subscription" })
+    .insert({ business_id: opts.businessId, number, description: opts.description, amount, currency: opts.currency ?? "BBD", due_date: opts.dueDate, status: "sent", kind: opts.kind ?? "subscription", is_first: !!opts.isFirst })
     .select("id, number, amount, currency")
     .single();
   if (error || !inv) throw new Error(error?.message ?? "could not create invoice");
@@ -159,13 +159,13 @@ export async function runBilling(admin: Admin, today = todayIn()) {
     if (amount > 0) {
       const inv = await createInvoice(admin, { businessId: sub.business_id, description: `${plan.name}, ${start} to ${end}${contacts.blocks ? `, plus ${contacts.count.toLocaleString("en-US")} contacts (${contacts.blocks} extra block${contacts.blocks > 1 ? "s" : ""} of ${plan.extra_contacts_block.toLocaleString("en-US")}, BBD $${contacts.amount.toFixed(2)})` : ""}${credit > 0 ? ` (credit BBD $${Math.min(credit, gross).toFixed(2)} applied)` : ""}`, amount, dueDate: start, currency: plan.currency });
       await logEvent(admin, sub.business_id, actor, "invoice", `Invoice ${inv.number} for BBD $${amount.toFixed(2)} sent`);
-      if (inv.payment_url) await notifyClient(admin, sub.business_id, `Your ZDM ChatCart invoice ${inv.number} for BBD $${amount.toFixed(2)} (${plan.name}) is ready. Pay here: ${inv.payment_url}`);
+      if (inv.payment_url) await notifyClient(admin, sub.business_id, `Your ZDM ChatCart invoice ${inv.number} for BBD $${amount.toFixed(2)} (${plan.name}) is ready. Pay here: ${inv.payment_url}${(await zdmBankDetails(admin)) ? TRANSFER_HINT : ""}`);
     }
     renewed++;
   }
 
   await admin.from("invoices").update({ status: "overdue" }).eq("status", "sent").lt("due_date", today);
-  const { data: open } = await admin.from("invoices").select("id, business_id, number, amount, due_date, reminders_sent, payment_url").eq("status", "overdue");
+  const { data: open } = await admin.from("invoices").select("id, business_id, number, amount, due_date, reminders_sent, payment_url").eq("status", "overdue").is("transfer_submitted_at", null);
   let reminded = 0;
   for (const inv of open ?? []) {
     const r = reminderDue(inv.due_date, today, inv.reminders_sent);
@@ -180,18 +180,52 @@ export async function runBilling(admin: Admin, today = todayIn()) {
 }
 
 /** Fygaro hook for ZDMINC's own invoices. Returns true when the payment was for an invoice. */
-export async function markInvoicePaid(admin: Admin, invoiceId: string, amount: string, txn: string) {
+export type PaidVia = "card" | "transfer" | "cash" | "other";
+
+export async function markInvoicePaid(admin: Admin, invoiceId: string, amount: string, txn: string, via: PaidVia = "card", actor: Actor = { id: null, name: via === "card" ? "Fygaro" : "Bank transfer" }) {
   const { data: inv } = await admin.from("invoices").select("id, business_id, number, amount, status, kind").eq("id", invoiceId).maybeSingle();
   if (!inv) return false;
   if (inv.status === "paid") return true;
-  if (Math.round(Number(amount) * 100) < Math.round(Number(inv.amount) * 100)) {
-    await logEvent(admin, inv.business_id, { id: null, name: "Fygaro" }, "invoice", `Fygaro paid ${amount} for ${inv.number}, less than the amount due. Check manually.`);
+  if (via === "card" && Math.round(Number(amount) * 100) < Math.round(Number(inv.amount) * 100)) {
+    await logEvent(admin, inv.business_id, actor, "invoice", `Fygaro paid ${amount} for ${inv.number}, less than the amount due. Check manually.`);
     return true;
   }
-  await admin.from("invoices").update({ status: "paid", paid_at: new Date().toISOString(), fygaro_transaction_id: txn }).eq("id", inv.id);
-  await logEvent(admin, inv.business_id, { id: null, name: "Fygaro" }, "invoice", `${inv.number} paid, BBD $${Number(inv.amount).toFixed(2)}`);
-  if (inv.kind === "ad_topup") await creditWallet(admin, inv.id);
-  const { count } = await admin.from("invoices").select("id", { count: "exact", head: true }).eq("business_id", inv.business_id).eq("status", "overdue");
-  if (!count) await admin.from("subscriptions").update({ status: "active" }).eq("business_id", inv.business_id).eq("status", "past_due");
+  const { data: changed } = await admin.from("invoices").update({
+    status: "paid", paid_at: new Date().toISOString(), paid_via: via,
+    ...(via === "card" ? { fygaro_transaction_id: txn } : txn ? { transfer_reference: txn } : {}),
+  }).eq("id", inv.id).neq("status", "paid").select("id");
+  if (!changed?.length) return true;
+  await logEvent(admin, inv.business_id, actor, "invoice", `${inv.number} paid${via === "transfer" ? " by bank transfer" : via === "card" ? "" : ` (${via})`}, BBD $${Number(inv.amount).toFixed(2)}`);
+  await afterInvoicePaid(admin, inv.id);
   return true;
 }
+
+/**
+ * Everything that follows a paid invoice, however it was paid: ad top-ups go to the wallet,
+ * the first invoice (setup + first month) starts the subscription, and a cleared overdue lifts "past due".
+ */
+export async function afterInvoicePaid(admin: Admin, invoiceId: string) {
+  const { data: inv } = await admin.from("invoices").select("id, business_id, number, kind, is_first").eq("id", invoiceId).single();
+  if (!inv) return;
+  if (inv.kind === "ad_topup") await creditWallet(admin, inv.id);
+  const { data: sub } = await admin.from("subscriptions").select("status, plans!subscriptions_plan_id_fkey(name)").eq("business_id", inv.business_id).maybeSingle<any>();
+  if (sub?.status === "pending_payment" && inv.is_first) {
+    const today = todayIn();
+    await admin.from("subscriptions").update({ status: "active", current_period_start: today, current_period_end: addMonths(today, 1), updated_at: new Date().toISOString() })
+      .eq("business_id", inv.business_id).eq("status", "pending_payment");
+    await logEvent(admin, inv.business_id, { id: null, name: "Signup" }, "plan_change", `First payment in: ${sub.plans?.name ?? "plan"} is live. Start the setup.`);
+    await notifyClient(admin, inv.business_id, `Thank you! Your ZDM ChatCart ${sub.plans?.name ?? ""} plan is live. ZDMINC will message you to book your setup: payments, WhatsApp, Instagram and your shop.`).catch(() => null);
+  }
+  const { count } = await admin.from("invoices").select("id", { count: "exact", head: true }).eq("business_id", inv.business_id).eq("status", "overdue");
+  if (!count) await admin.from("subscriptions").update({ status: "active" }).eq("business_id", inv.business_id).eq("status", "past_due");
+}
+
+/** ZDMINC's bank details for clients paying invoices by transfer (Admin > Plans and billing). */
+export async function zdmBankDetails(admin: Admin) {
+  const { data } = await admin.from("platform_settings").select("value").eq("key", "zdm_bank_details").maybeSingle();
+  const v = (data?.value ?? "").trim();
+  return v.length >= 10 ? v : null;
+}
+
+/** Line added to invoice messages so clients know they can pay by bank transfer too. */
+export const TRANSFER_HINT = " Or pay by bank transfer (1st Pay or any bank): the details are in Plan and billing.";

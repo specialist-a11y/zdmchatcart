@@ -7,7 +7,7 @@ Improve the client CRM using `docs/improvements/`. Read `docs/improvements/READM
 
 ## Stack
 - Next.js 15 App Router, server components and server actions, TypeScript.
-- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0016_shop_front.sql`, so add the next as `0017_...sql` and never edit an applied one except seed text.
+- Supabase (Postgres + RLS). Migrations in `supabase/migrations/`, numbered; the latest is `0022_mark_paid_final.sql`, so add the next as `0023_...sql` and never edit an applied one except seed text.
 - RLS pattern: read policies use `private.is_member(business_id) or private.is_staff()`; writes go through server actions using `createAdminClient()` after an owner/admin role check (`requireMembership(slug)` returns `role`).
 - WhatsApp Cloud API (`lib/whatsapp.ts`), 24-hour window: free text only within 24 hours of the customer's last message, otherwise approved templates.
 - Instagram Graph via the client's Page token (`lib/instagram.ts`, `lib/social.ts`).
@@ -16,6 +16,7 @@ Improve the client CRM using `docs/improvements/`. Read `docs/improvements/READM
 - Payments: Fygaro links and webhook (`app/api/webhooks/fygaro`), `mark_order_paid` RPC is idempotent.
 
 ## Conventions
+- SEO matters: shop pages (`app/s/[slug]`, product pages at `/p/[item]`) set title, description, canonical (the shop's own domain when live), Open Graph and schema.org data via `lib/seo.ts`. Keep `app/robots.ts` and `app/sitemap.ts` (host-aware for custom domains) in step with new public pages; private pages are noindexed in `next.config.mjs`.
 - CRM pages use `components/CrmShell.tsx` (`PageHeader` with `num(key)` from `lib/crm-nav.ts`, `Kpi`, `Dot`) and classes in `app/globals.css`.
 - Mobile first: works at 390px wide, no sideways page scroll, 44px tap targets, 16px inputs. Tables scroll inside `.table-wrap`.
 - Brand: ink #0B0F0E, electric blue #3D8BFF, text blue #1D5FD1, fonts Barlow Condensed (headings) and DM Sans.

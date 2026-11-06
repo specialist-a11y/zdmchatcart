@@ -5,9 +5,10 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { requireStaff, requireStaffManager } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { changePlan, createInvoice, creditWallet, logEvent, notifyClient, runBilling, type Actor } from "@/lib/zdm-billing";
+import { afterInvoicePaid, changePlan, createInvoice, creditWallet, logEvent, markInvoicePaid, TRANSFER_HINT, zdmBankDetails, notifyClient, runBilling, type Actor } from "@/lib/zdm-billing";
 import { digits, sendZdm } from "@/lib/zdm-whatsapp";
 import { todayIn } from "@/lib/billing";
+import { FEATURE_KEYS } from "@/lib/plan-features";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
 const back = (path: string, msg: string): never => redirect(`${path}${path.includes("?") ? "&" : "?"}msg=${encodeURIComponent(msg)}`);
@@ -119,8 +120,19 @@ export async function savePlan(f: FormData) {
     active: f.get("active") === "on",
   };
   const db = createAdminClient();
-  const { error } = await db.from("plans").update({ ...row, image_posts: Math.max(0, Math.round(Number(str(f, "image_posts")) || 0)) }).eq("id", str(f, "id"));
-  if (error && /image_posts/.test(error.message)) await db.from("plans").update(row).eq("id", str(f, "id")); // before 0015
+  const extras = {
+    image_posts: Math.max(0, Math.round(Number(str(f, "image_posts")) || 0)),
+    setup_fee: Math.max(0, Number(str(f, "setup_fee")) || 0),
+    self_serve: f.get("self_serve") === "on",
+    features: FEATURE_KEYS.filter((k) => f.get(`f_${k}`) === "on"),
+  };
+  const { error } = await db.from("plans").update({ ...row, ...extras }).eq("id", str(f, "id"));
+  if (error) {
+    // Before 0019 (features, setup fee) or 0015 (image posts): save what the database has.
+    const { error: e2 } = await db.from("plans").update({ ...row, image_posts: extras.image_posts }).eq("id", str(f, "id"));
+    if (e2) await db.from("plans").update(row).eq("id", str(f, "id"));
+    back("/admin/billing", "Plan saved, but features and setup fee need supabase/migrations/0019_plan_features.sql.");
+  }
   back("/admin/billing", "Plan saved. Existing clients pay the new price from their next renewal.");
 }
 
@@ -133,7 +145,7 @@ export async function newInvoice(f: FormData) {
   const admin = createAdminClient();
   const inv = await createInvoice(admin, { businessId: id, description: str(f, "description") || "ZDM ChatCart", amount, dueDate: str(f, "due_date") || todayIn() });
   await logEvent(admin, id, actorOf(staff), "invoice", `Invoice ${inv.number} for BBD $${amount.toFixed(2)} created`);
-  if (f.get("notify") === "on") await notifyClient(admin, id, `New ZDM ChatCart invoice ${inv.number}: BBD $${amount.toFixed(2)}.${inv.payment_url ? ` Pay here: ${inv.payment_url}` : ""}`, actorOf(staff));
+  if (f.get("notify") === "on") await notifyClient(admin, id, `New ZDM ChatCart invoice ${inv.number}: BBD $${amount.toFixed(2)}.${inv.payment_url ? ` Pay here: ${inv.payment_url}` : ""}${(await zdmBankDetails(admin)) ? TRANSFER_HINT : ""}`, actorOf(staff));
   back("/admin/billing", `Invoice ${inv.number} created${inv.payment_url ? "" : ". Add ZDMINC's Fygaro keys to include a payment link."}`);
 }
 
@@ -143,9 +155,9 @@ export async function setInvoiceStatus(f: FormData) {
   const status = str(f, "status");
   if (!["paid", "void"].includes(status)) back("/admin/billing", "Unknown status");
   const admin = createAdminClient();
-  const { data: inv } = await admin.from("invoices").update({ status, paid_at: status === "paid" ? new Date().toISOString() : null }).eq("id", id).select("business_id, number").single();
+  const { data: inv } = await admin.from("invoices").update({ status, paid_at: status === "paid" ? new Date().toISOString() : null, paid_via: status === "paid" ? "other" : null }).eq("id", id).select("business_id, number").single();
   if (inv) await logEvent(admin, inv.business_id, actorOf(staff), "invoice", `${inv.number} marked ${status} by hand`);
-  if (inv && status === "paid") await creditWallet(admin, id);
+  if (inv && status === "paid") await afterInvoicePaid(admin, id);
   back("/admin/billing", `Invoice marked ${status}`);
 }
 
@@ -154,7 +166,7 @@ export async function remindInvoice(f: FormData) {
   const admin = createAdminClient();
   const { data: inv } = await admin.from("invoices").select("id, business_id, number, amount, payment_url, reminders_sent").eq("id", str(f, "id")).single();
   if (!inv) back("/admin/billing", "Invoice not found");
-  const res = await notifyClient(admin, inv!.business_id, `Reminder: ZDM ChatCart invoice ${inv!.number} for BBD $${Number(inv!.amount).toFixed(2)} is still open.${inv!.payment_url ? ` Pay here: ${inv!.payment_url}` : ""}`, actorOf(staff));
+  const res = await notifyClient(admin, inv!.business_id, `Reminder: ZDM ChatCart invoice ${inv!.number} for BBD $${Number(inv!.amount).toFixed(2)} is still open.${inv!.payment_url ? ` Pay here: ${inv!.payment_url}` : ""}${(await zdmBankDetails(admin)) ? TRANSFER_HINT : ""}`, actorOf(staff));
   await admin.from("invoices").update({ reminders_sent: inv!.reminders_sent + 1 }).eq("id", inv!.id);
   back("/admin/billing", res.ok ? "Reminder sent on WhatsApp" : `Not sent: ${res.error}`);
 }
@@ -287,4 +299,31 @@ export async function removeStaff(f: FormData) {
   if (id === staff.user_id) back("/admin/team", "You can't remove yourself");
   await createAdminClient().from("platform_staff").delete().eq("user_id", id);
   back("/admin/team", "Removed");
+}
+
+// Bank transfers for ZDMINC invoices ------------------------------------------------------
+export async function saveZdmBank(f: FormData) {
+  await requireStaffManager();
+  const value = str(f, "bank_details").slice(0, 1200);
+  await createAdminClient().from("platform_settings").upsert({ key: "zdm_bank_details", value, updated_at: new Date().toISOString() });
+  back("/admin/billing", value ? "Bank details saved. Clients now see Pay by bank transfer on open invoices." : "Bank details removed. Clients only see the card link.");
+}
+
+export async function confirmInvoiceTransfer(f: FormData) {
+  const { staff } = await requireStaffManager();
+  const admin = createAdminClient();
+  const { data: inv } = await admin.from("invoices").select("id, amount, transfer_reference").eq("id", str(f, "id")).single();
+  if (!inv) back("/admin/billing", "Invoice not found");
+  await markInvoicePaid(admin, inv!.id, String(inv!.amount), inv!.transfer_reference ?? "", "transfer", actorOf(staff));
+  back("/admin/billing", "Marked paid by bank transfer");
+}
+
+export async function rejectInvoiceTransfer(f: FormData) {
+  const { staff } = await requireStaffManager();
+  const admin = createAdminClient();
+  const { data: inv } = await admin.from("invoices").update({ transfer_submitted_at: null }).eq("id", str(f, "id")).select("id, business_id, number, amount, payment_url").single();
+  if (!inv) back("/admin/billing", "Invoice not found");
+  await logEvent(admin, inv!.business_id, actorOf(staff), "invoice", `Transfer for ${inv!.number} not found in ZDMINC's account`);
+  await notifyClient(admin, inv!.business_id, `We couldn't find your bank transfer for invoice ${inv!.number} (BBD $${Number(inv!.amount).toFixed(2)}) yet. Please check it went through with ${inv!.number} as the reference, or pay by card${inv!.payment_url ? `: ${inv!.payment_url}` : " in Plan and billing"}.`, actorOf(staff));
+  back("/admin/billing", "Client told the transfer wasn't found");
 }

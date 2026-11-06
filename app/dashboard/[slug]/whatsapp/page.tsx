@@ -1,3 +1,4 @@
+import { gateSection } from "@/components/PlanLock";
 import Link from "next/link";
 import { requireMembership } from "@/lib/business";
 import { PageHeader, Dot } from "@/components/CrmShell";
@@ -28,6 +29,8 @@ const BADGE: Record<string, string> = { draft: "low", pending: "sent", approved:
 
 export default async function WhatsAppPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "whatsapp");
+  if (lock) return lock;
   const { msg } = await searchParams;
   const { supabase, business, role, viewingAsStaff } = await requireMembership(slug);
   const [{ data: wa }, { data: templates, error: tErr }] = await Promise.all([

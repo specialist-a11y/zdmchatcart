@@ -1,3 +1,5 @@
+import { sectionAllowed } from "@/lib/entitlements";
+import { gateSection } from "@/components/PlanLock";
 import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import { redirect } from "next/navigation";
@@ -17,6 +19,7 @@ const who = (u: { email?: string | null; user_metadata?: any }) => u.user_metada
 async function reviewAd(f: FormData) {
   "use server";
   const slug = str(f, "slug");
+  if (!(await sectionAllowed(slug, "ads"))) redirect(`/dashboard/${slug}/ads`);
   const { supabase, user, business } = await requireMembership(slug);
   const approve = str(f, "decision") === "approve";
   const note = str(f, "note");
@@ -32,6 +35,7 @@ async function reviewAd(f: FormData) {
 async function saveBudget(f: FormData) {
   "use server";
   const slug = str(f, "slug");
+  if (!(await sectionAllowed(slug, "ads"))) redirect(`/dashboard/${slug}/ads`);
   const { user, business, role } = await requireMembership(slug);
   if (role !== "owner" && role !== "admin") redirect(`/dashboard/${slug}/ads?msg=${encodeURIComponent("Only the account owner or an admin can set the budget")}`);
   const n = Number(str(f, "budget"));
@@ -45,6 +49,7 @@ async function saveBudget(f: FormData) {
 async function topUp(f: FormData) {
   "use server";
   const slug = str(f, "slug");
+  if (!(await sectionAllowed(slug, "ads"))) redirect(`/dashboard/${slug}/ads`);
   const { user, business, role } = await requireMembership(slug);
   if (role !== "owner" && role !== "admin") redirect(`/dashboard/${slug}/ads?msg=${encodeURIComponent("Only the account owner or an admin can top up")}`);
   const amount = Number(str(f, "amount"));
@@ -58,6 +63,8 @@ async function topUp(f: FormData) {
 
 export default async function AdsPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "ads");
+  if (lock) return lock;
   const { msg } = await searchParams;
   const { supabase, business, role } = await requireMembership(slug);
   const canApprove = role === "owner" || role === "admin";

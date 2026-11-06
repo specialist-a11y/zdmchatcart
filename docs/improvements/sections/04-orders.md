@@ -20,6 +20,8 @@
 - Status, source and tracking code per order
 - Order page: timeline, items, status
 - Send pay link, mark paid, send or view receipt
+- Bank transfers: Transfer to check, screenshot, confirm or not received
+- Show QR to pay by card in person
 
 ## How it should work
 

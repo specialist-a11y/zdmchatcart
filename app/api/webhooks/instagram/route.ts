@@ -1,3 +1,4 @@
+import { hasFeature } from "@/lib/entitlements";
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyMetaSignature } from "@/lib/whatsapp";
@@ -39,6 +40,8 @@ export async function POST(req: Request) {
     if (!integ) continue;
     if (c.fromId && c.fromId === c.igUserId) continue; // the shop's own comments
     const businessId = integ.business_id as string;
+    // Comment auto-replies come with Growth and up.
+    if (!(await hasFeature(businessId, "ig_autoreplies", admin))) continue;
 
     const { data: rules } = await admin.from("ig_autoreplies")
       .select("id, keyword, media_id, active, public_replies, dm_text, daily_cap, short_links(code, ref)")

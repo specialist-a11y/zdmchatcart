@@ -1,3 +1,4 @@
+import { gateSection } from "@/components/PlanLock";
 import Link from "next/link";
 import { requireMembership } from "@/lib/business";
 import { PageHeader, Kpi } from "@/components/CrmShell";
@@ -22,6 +23,8 @@ const STATUS: Record<string, string> = { scheduled: "Scheduled", publishing: "Po
 
 export default async function MarketingPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ m?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "marketing");
+  if (lock) return lock;
   const sp = await searchParams;
   const { supabase, business } = await requireMembership(slug);
   const base = `/dashboard/${slug}`;

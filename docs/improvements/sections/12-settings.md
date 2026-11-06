@@ -19,6 +19,7 @@
 - Payment keys form
 - WhatsApp keys form
 - Meta ads tracking
+- Bank transfer on/off and bank details
 
 ## How it should work
 

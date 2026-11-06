@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon } from "./Icon";
 
-export type NavItem = { href: string; label: string; icon: string; badge?: number | null; exact?: boolean };
+export type NavItem = { href: string; label: string; icon: string; badge?: number | null; exact?: boolean; locked?: string | null };
 
 /** Sidebar links; marks the current page. Closes the phone menu after a tap. */
 export function NavLinks({ items }: { items: NavItem[] }) {
@@ -14,11 +14,11 @@ export function NavLinks({ items }: { items: NavItem[] }) {
   return (
     <nav aria-label="Main" className="crm-nav">
       {items.map((it) => (
-        <Link key={it.href} href={it.href} aria-current={it === best ? "page" : undefined}
+        <Link key={it.href} href={it.href} className={it.locked ? "is-locked" : undefined} aria-current={it === best ? "page" : undefined}
           onClick={(e) => (e.currentTarget.closest("details") as HTMLDetailsElement | null)?.removeAttribute("open")}>
           <Icon name={it.icon} />
           <span>{it.label}</span>
-          {it.badge ? <b className="crm-badge">{it.badge}</b> : null}
+          {it.locked ? <b className="crm-lock" title={it.locked}>{it.locked}</b> : it.badge ? <b className="crm-badge">{it.badge}</b> : null}
         </Link>
       ))}
     </nav>

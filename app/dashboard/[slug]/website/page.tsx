@@ -103,6 +103,21 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
     redirect(`${path}?msg=${encodeURIComponent("Try a different short name")}#links`);
   }
 
+  async function counterQr() {
+    "use server";
+    const { business } = await guard();
+    const admin = createAdminClient();
+    // One "Counter QR" short link per shop, so in-person scans are counted on their own.
+    const { data: existing } = await admin.from("short_links").select("code").eq("business_id", business.id).eq("ref", "COUNTER").maybeSingle();
+    let code = existing?.code as string | undefined;
+    for (let i = 1; !code && i < 30; i++) {
+      const c = slugifyCode(`${slug.slice(0, 28)}-counter${i > 1 ? "-" + i : ""}`);
+      const { data } = await admin.from("short_links").insert({ business_id: business.id, code: c, label: "Counter QR", ref: "COUNTER" }).select("code").maybeSingle();
+      code = data?.code;
+    }
+    redirect(code ? `${path}/qr-card?code=${code}` : `${path}?msg=${encodeURIComponent("Couldn't make the counter link")}#links`);
+  }
+
   async function deleteLink(formData: FormData) {
     "use server";
     const { business } = await guard();
@@ -121,6 +136,10 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
         <section className="card stack" style={{ gap: 8 }}>
           <h2>Your shop link</h2>
           <div className="row" style={{ gap: 8 }}><code style={{ wordBreak: "break-all", fontSize: 15, flex: "1 1 200px" }}>{shopUrl}</code><CopyButton text={shopUrl} /><QrButton url={shopUrl} name={`${slug}-shop`} /></div>
+          <div className="row" style={{ gap: 8 }}>
+            {canEdit && <form action={counterQr}><button className="btn small">Counter QR card</button></form>}
+            <Link className="btn secondary small" href={`${path}/qr-card`} target="_blank">Printable QR card</Link>
+          </div>
           <span className="muted">Put it in your Instagram bio and WhatsApp profile. For posts, Stories and ads, make a short link below so each one's sales are counted.</span>
         </section>
         <section className="card stack" style={{ gap: 8 }}>
@@ -193,7 +212,7 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
                 const url = shortUrl(l.code, live?.domain);
                 return (
                   <tr key={l.id}>
-                    <td><div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><code>{url.replace(/^https?:\/\//, "")}</code><CopyButton text={url} /><QrButton url={url} name={`${slug}-${l.code}`} /></div></td>
+                    <td><div className="row" style={{ gap: 8, flexWrap: "nowrap" }}><code>{url.replace(/^https?:\/\//, "")}</code><CopyButton text={url} /><QrButton url={url} name={`${slug}-${l.code}`} /><Link className="btn secondary small" href={`${path}/qr-card?code=${l.code}`} target="_blank">Card</Link></div></td>
                     <td>{l.label}<br /><span className="muted" style={{ fontSize: 12 }}>tracks as {l.ref}</span></td>
                     <td><b>{l.clicks}</b></td>
                     <td><b>{s?.n ?? 0}</b>{l.clicks > 0 && s ? <span className="muted" style={{ fontSize: 12 }}> · {Math.round((s.n / l.clicks) * 100)}%</span> : null}</td>

@@ -31,6 +31,9 @@ export const FRONT_CSS = `
 .s-group { scroll-margin-top: 64px; }
 
 /* Cards: tappable, badge, round + */
+.s-plink { color: inherit; text-decoration: none; }
+.s-plink:hover { text-decoration: underline; }
+.s-piece { text-decoration: none; color: inherit; }
 .s-card { cursor: pointer; position: relative; }
 .s-card:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
 .s-badgechip { position: absolute; top: 10px; left: 10px; z-index: 2; font-size: 11px; font-weight: 800; padding: 4px 9px; border-radius: 999px; color: #fff; background: var(--special, #E0662B); }
@@ -83,6 +86,14 @@ export const FRONT_CSS = `
 .s-how { list-style: none; margin: 0; padding: 12px 14px; border-radius: 12px; background: var(--tint, #f3f6f5); display: flex; flex-direction: column; gap: 6px; font-size: 14px; counter-reset: how; }
 .s-how li { counter-increment: how; display: flex; gap: 8px; }
 .s-how li::before { content: counter(how); flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: var(--on-accent, #fff); font-size: 12px; font-weight: 800; display: grid; place-items: center; }
+
+/* Rental dates bar and notes */
+.s-rentbar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px 14px; padding: 14px; border: 1.5px solid var(--line); border-radius: 16px; background: var(--card); }
+.s-rentbar > strong { flex: 1 0 100%; font-size: 17px; }
+.s-rentbar label { flex: 1 1 140px; display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; }
+.s-rentbar input, .s-rentbar select { font-size: 16px; min-height: 46px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--fg); width: 100%; }
+.s-rentbar > span { flex: 1 1 180px; padding-bottom: 12px; font-size: 14px; color: var(--muted); }
+.s-rentnote { display: block; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
 
 /* Phones: two columns of products */
 @media (max-width: 720px) {

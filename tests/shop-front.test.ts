@@ -55,7 +55,7 @@ test("visit sources and specials", () => {
 test("shop score and change", async () => {
   const { shopScore, change } = await import("../lib/shop-front.ts");
   const s = shopScore({ logo: true, colour: true, domain: false, products: 4, withPhotos: 1, hours: true, about: false, special: false, base: "/d/x" });
-  assert.equal(s.pct, 43);
+  assert.equal(s.pct, 38);
   assert.equal(s.items.find((i) => i.key === "photos")?.todo, "Add photos to 3 products");
   assert.equal(change(118, 100), 18);
   assert.equal(change(5, 0), null);

@@ -15,9 +15,11 @@ export type InboundText = {
   name?: string;
   messageId: string;
   text: string;
+  /** Set when the customer sent a photo (e.g. a payment screenshot). text is then the caption, or "". */
+  media?: { id: string; mime: string };
 };
 
-/** Pull text messages out of a webhook payload (ignores statuses, media, etc.). */
+/** Pull text and photo messages out of a webhook payload (ignores statuses and other media). */
 export function parseInbound(payload: any): InboundText[] {
   const out: InboundText[] = [];
   for (const entry of payload?.entry ?? []) {
@@ -29,6 +31,10 @@ export function parseInbound(payload: any): InboundText[] {
         (v.contacts ?? []).map((c: any) => [c.wa_id, c.profile?.name]),
       );
       for (const m of v.messages ?? []) {
+        if (m.type === "image" && m.image?.id) {
+          out.push({ phoneNumberId, from: m.from, name: names.get(m.from), messageId: m.id, text: m.image.caption ?? "", media: { id: m.image.id, mime: m.image.mime_type ?? "image/jpeg" } });
+          continue;
+        }
         const text = m.type === "text" ? m.text?.body : m.type === "button" ? m.button?.text : undefined;
         if (!text) continue;
         out.push({ phoneNumberId, from: m.from, name: names.get(m.from), messageId: m.id, text });
@@ -118,4 +124,16 @@ export async function sendWhatsAppTemplate(opts: {
 /** Meta lets you send free text only within 24 hours of the person's last message. */
 export function insideServiceWindow(lastInboundIso: string | null | undefined, now = Date.now()) {
   return !!lastInboundIso && now - Date.parse(lastInboundIso) < 24 * 3600 * 1000;
+}
+
+/** Download a photo the customer sent (WhatsApp media URLs need the business's token and expire quickly). */
+export async function downloadWhatsAppMedia(mediaId: string, accessToken: string): Promise<{ bytes: Uint8Array; mime: string } | null> {
+  const version = process.env.WHATSAPP_GRAPH_VERSION || "v22.0";
+  const meta = await fetch(`https://graph.facebook.com/${version}/${mediaId}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!meta.ok) return null;
+  const info: any = await meta.json().catch(() => ({}));
+  if (!info?.url || (info.file_size && info.file_size > 10 * 1024 * 1024)) return null;
+  const file = await fetch(info.url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!file.ok) return null;
+  return { bytes: new Uint8Array(await file.arrayBuffer()), mime: info.mime_type ?? "image/jpeg" };
 }

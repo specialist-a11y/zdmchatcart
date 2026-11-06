@@ -34,7 +34,34 @@ export default async function SettingsPage({ params, searchParams }: {
   const social = integrations?.find((i) => i.provider === "instagram" && i.status === "connected");
   const sc = (social?.config ?? {}) as { page_name?: string; ig_username?: string | null; ig_followers?: number | null; pages?: { id: string; name: string; ig: string | null }[] };
   const path = `/dashboard/${slug}/settings`;
+  const { data: bank } = await createAdminClient().from("businesses").select("bank_transfer_enabled, bank_details, rental_agreement_url, rental_pickup_times, rental_lead_days, rental_buffer_days").eq("id", business.id).single();
+  const { count: rentalCount } = await createAdminClient().from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("rental", true);
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
+
+  async function saveBank(formData: FormData) {
+    "use server";
+    const { business } = await requireAdmin(slug);
+    const details = String(formData.get("bank_details") ?? "").trim().slice(0, 600);
+    const enabled = formData.get("bank_transfer_enabled") === "on";
+    if (enabled && details.length < 10) redirect(`${path}?msg=${encodeURIComponent("Add your bank details before turning bank transfer on")}#bank`);
+    await createAdminClient().from("businesses").update({ bank_transfer_enabled: enabled, bank_details: details || null }).eq("id", business.id);
+    redirect(`${path}?msg=${encodeURIComponent(enabled ? "Bank transfer is on" : "Bank transfer saved (off)")}#bank`);
+  }
+
+  async function saveRentals(formData: FormData) {
+    "use server";
+    const { business } = await requireAdmin(slug);
+    const url = String(formData.get("rental_agreement_url") ?? "").trim();
+    if (url && !/^https?:\/\/\S+$/.test(url)) redirect(`${path}?msg=${encodeURIComponent("The agreement link must start with https://")}#rentals`);
+    const n = (k: string, max: number) => Math.min(max, Math.max(0, Math.floor(Number(formData.get(k) ?? 0) || 0)));
+    await createAdminClient().from("businesses").update({
+      rental_agreement_url: url || null,
+      rental_pickup_times: String(formData.get("rental_pickup_times") ?? "").trim().slice(0, 300) || null,
+      rental_lead_days: n("rental_lead_days", 60),
+      rental_buffer_days: n("rental_buffer_days", 7),
+    }).eq("id", business.id);
+    redirect(`${path}?msg=${encodeURIComponent("Rental settings saved")}#rentals`);
+  }
 
   async function disconnectSocial() {
     "use server";
@@ -153,6 +180,47 @@ export default async function SettingsPage({ params, searchParams }: {
         ))}
         <span className="muted" style={{ fontSize: 13, marginTop: 6 }}>Checked when you open this page and every night. If one goes red we WhatsApp you. Anything you can't fix here, <Link href={`/dashboard/${slug}/support?t=new`}>ask ZDMINC</Link>.</span>
       </section>
+
+      <form id="rentals" action={saveRentals} className="card stack">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 22 }}>Rentals</h2>
+          <span className={`badge ${rentalCount ? "paid" : ""}`}>{rentalCount ? `${rentalCount} rental item${rentalCount > 1 ? "s" : ""}` : "no rental items"}</span>
+        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          Turn any product into a rental from Products (Rental settings). Customers then pick a pickup date and how many days or nights, only see what&apos;s free on those dates, and the booking holds the item so nobody else can take it.
+        </p>
+        <label>Rental agreement link (customers must tick to accept it)
+          <input name="rental_agreement_url" type="url" defaultValue={bank?.rental_agreement_url ?? ""} disabled={!isAdmin} placeholder="https://starlightcinemaexperiences.com/rental-agreement" />
+        </label>
+        <label>Pickup times customers can choose (comma separated, leave blank to arrange on WhatsApp)
+          <input name="rental_pickup_times" defaultValue={bank?.rental_pickup_times ?? ""} disabled={!isAdmin} placeholder="9:00 AM, 12:00 PM, 4:00 PM" />
+        </label>
+        <div className="grid">
+          <label>Book at least this many days ahead<input name="rental_lead_days" type="number" min="0" max="60" defaultValue={bank?.rental_lead_days ?? 1} disabled={!isAdmin} /></label>
+          <label>Days blocked after each return (cleaning, checks)<input name="rental_buffer_days" type="number" min="0" max="7" defaultValue={bank?.rental_buffer_days ?? 0} disabled={!isAdmin} /></label>
+        </div>
+        {isAdmin && <button className="btn" style={{ alignSelf: "flex-start" }}>Save rental settings</button>}
+      </form>
+
+      <form id="bank" action={saveBank} className="card stack">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <h2 style={{ fontSize: 22 }}>Bank transfer (1st Pay or any bank)</h2>
+          <span className={`badge ${bank?.bank_transfer_enabled ? "paid" : ""}`}>{bank?.bank_transfer_enabled ? "on" : "off"}</span>
+        </div>
+        <p className="muted" style={{ margin: 0 }}>
+          A second way to pay, next to card links. Customers get your details on WhatsApp with their order code as the reference, then send a screenshot or reference number.
+          The order shows as <b>Transfer to check</b> until you confirm the money is in your account. Card payments still confirm on their own.
+        </p>
+        <label>Bank details customers will see
+          <textarea name="bank_details" rows={4} maxLength={600} defaultValue={bank?.bank_details ?? ""} disabled={!isAdmin}
+            placeholder={"CIBC Caribbean, Holetown branch\nAccount name: Island Crumb Bakery Ltd\nAccount number: 1002345678\n1st Pay: use the account number above"} />
+        </label>
+        <label className="row" style={{ gap: 8, fontWeight: 500 }}>
+          <input type="checkbox" name="bank_transfer_enabled" defaultChecked={!!bank?.bank_transfer_enabled} disabled={!isAdmin} style={{ width: "auto" }} />
+          Offer bank transfer at checkout and on WhatsApp
+        </label>
+        {isAdmin && <button className="btn" style={{ alignSelf: "flex-start" }}>Save bank transfer</button>}
+      </form>
 
       <section id="team" className="card stack" style={{ gap: 8 }}>
         <div className="row" style={{ justifyContent: "space-between" }}>

@@ -1,7 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+
 export const metadata: Metadata = {
+  // Lets share images and canonical links be written as paths.
+  metadataBase: siteUrl && /^https?:\/\//.test(siteUrl) ? new URL(siteUrl) : undefined,
   title: "ZDM ChatCart",
   description: "Browse online. Order on WhatsApp. Get paid with Fygaro.",
 };

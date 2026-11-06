@@ -1,3 +1,5 @@
+import { sectionAllowed } from "@/lib/entitlements";
+import { gateSection } from "@/components/PlanLock";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
@@ -21,6 +23,8 @@ const DEFAULT_REPLIES = "Sent! Check your DMs for the link\nJust sent it to your
 
 export default async function AutoRepliesPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string; edit?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "autoreplies");
+  if (lock) return lock;
   const { msg, edit } = await searchParams;
   const { supabase, business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
@@ -65,6 +69,7 @@ export default async function AutoRepliesPage({ params, searchParams }: { params
     "use server";
     const ctx = await requireMembership(slug);
     if (ctx.role !== "owner" && ctx.role !== "admin") redirect(`${path}?msg=${encodeURIComponent("Only owners and admins can change auto-replies")}`);
+    if (!(await sectionAllowed(slug, "autoreplies"))) redirect(`${path}?msg=${encodeURIComponent("Auto-replies aren't on your plan")}`);
     return ctx;
   }
 

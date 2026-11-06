@@ -1,6 +1,6 @@
 # Build order
 
-Done so far: foundations, quick wins, section 2 and the shop front (migrations 0014 to 0016). The nightly job runs inside the billing cron and the owner summary inside the posts cron (Vercel Hobby allows 2 crons).
+Done so far: foundations, quick wins, section 2, the shop front, SEO, and from the latest pack bank transfers, plan features and signup, product import, rentals and QR cards (migrations 0014 to 0021). The nightly job runs inside the billing cron and the owner summary inside the posts cron (Vercel Hobby allows 2 crons).
 
 Work top to bottom. Each line links to its section file, which has the why, the wireframe and the files to start from.
 
@@ -24,7 +24,7 @@ Work top to bottom. Each line links to its section file, which has the why, the 
 - [x] **09 Ads**: Low wallet alert on WhatsApp ([section](sections/09-ads.md))
 - [x] **10 Content (videos)**: Full-screen preview and download ([section](sections/10-videos.md))
 - [x] **11 Website**: Shop score with one-minute to-dos ([section](sections/11-website.md))
-- [x] **11 Website**: “Make a link for today’s post” with QR card ([section](sections/11-website.md))
+- [x] **11 Website**: “Make a link for today’s post” (QR cards now built) ([section](sections/11-website.md))
 - [x] **12 Settings**: Expiry warnings ([section](sections/12-settings.md))
 - [x] **13 Business info**: Logo upload ([section](sections/13-business.md))
 - [x] **14 Plan and billing**: Usage meters for everything in the plan ([section](sections/14-billing.md))

@@ -3,7 +3,9 @@
 import { redirect } from "next/navigation";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { changePlan, logEvent, zdmFygaro } from "@/lib/zdm-billing";
+import { changePlan, createInvoice, logEvent, zdmFygaro } from "@/lib/zdm-billing";
+import { firstInvoice } from "@/lib/plan-features";
+import { todayIn } from "@/lib/billing";
 import { buildPaymentUrl } from "@/lib/fygaro";
 
 const str = (f: FormData, k: string) => String(f.get(k) ?? "").trim();
@@ -23,6 +25,19 @@ export async function requestPlanChange(f: FormData) {
   const admin = createAdminClient();
   const { data: plan } = await admin.from("plans").select("id, active").eq("id", str(f, "plan")).maybeSingle();
   if (!plan?.active) redirect(`${path}?msg=${encodeURIComponent("Pick a plan")}`);
+  const { data: sub } = await admin.from("subscriptions").select("status, plan_id").eq("business_id", business.id).single();
+  // Not started yet: swap the plan and send a fresh setup + first month invoice.
+  if (sub?.status === "pending_payment") {
+    if (sub.plan_id !== plan!.id) {
+      const { data: p } = await admin.from("plans").select("id, name, monthly_price, setup_fee, currency").eq("id", plan!.id).single();
+      await admin.from("invoices").update({ status: "void" }).eq("business_id", business.id).eq("is_first", true).in("status", ["sent", "overdue"]);
+      await admin.from("subscriptions").update({ plan_id: p!.id, updated_at: new Date().toISOString() }).eq("business_id", business.id);
+      const fi = firstInvoice({ name: p!.name, monthly_price: Number(p!.monthly_price), setup_fee: Number(p!.setup_fee) });
+      await createInvoice(admin, { businessId: business.id, description: fi.description, amount: fi.amount, dueDate: todayIn(), currency: p!.currency, isFirst: true });
+      await logEvent(admin, business.id, { id: user.id, name: who(user) }, "plan_change", `Switched to ${p!.name} before starting`);
+    }
+    redirect(`${path}?msg=${encodeURIComponent("Plan switched. Your setup invoice has been updated below.")}`);
+  }
   let note: string;
   try {
     const { preview, invoice } = await changePlan(admin, { businessId: business.id, toPlanId: plan!.id, actor: { id: user.id, name: who(user) }, byClient: true, reason: "Changed by client" });
@@ -46,6 +61,33 @@ export async function saveBillingDetails(f: FormData) {
   }).eq("id", business.id);
   await logEvent(admin, business.id, { id: user.id, name: who(user) }, "contact", "Billing details updated by client");
   redirect(`/dashboard/${slug}/billing?msg=${encodeURIComponent("Billing details saved")}`);
+}
+
+const PROOF_TYPES: Record<string, string> = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic", "application/pdf": "pdf" };
+
+/** Client says they paid a ZDMINC invoice by bank transfer: save the reference and screenshot for ZDMINC to check. */
+export async function submitInvoiceTransfer(f: FormData) {
+  const slug = str(f, "slug");
+  const { user, business } = await requireBillingAdmin(slug);
+  const path = `/dashboard/${slug}/billing`;
+  const admin = createAdminClient();
+  const { data: inv } = await admin.from("invoices").select("id, number, status").eq("id", str(f, "invoice")).eq("business_id", business.id).maybeSingle();
+  if (!inv || !["sent", "overdue"].includes(inv.status)) redirect(`${path}?msg=${encodeURIComponent("That invoice isn't open")}`);
+  const reference = str(f, "reference").slice(0, 60);
+  const file = f.get("proof");
+  const hasFile = file instanceof File && file.size > 0;
+  if (!reference && !hasFile) redirect(`${path}?msg=${encodeURIComponent("Add the screenshot or the reference number from your bank")}`);
+  const patch: Record<string, unknown> = { transfer_reference: reference || null, transfer_submitted_at: new Date().toISOString() };
+  if (hasFile) {
+    const ext = PROOF_TYPES[(file as File).type];
+    if (!ext || (file as File).size > 10 * 1024 * 1024) redirect(`${path}?msg=${encodeURIComponent("Send a photo or PDF under 10 MB")}`);
+    const key = `${business.id}/invoices/${inv!.id}.${ext}`;
+    const up = await admin.storage.from("transfer-proofs").upload(key, Buffer.from(await (file as File).arrayBuffer()), { contentType: (file as File).type, upsert: true });
+    if (!up.error) patch.transfer_proof_path = key;
+  }
+  await admin.from("invoices").update(patch).eq("id", inv!.id);
+  await logEvent(admin, business.id, { id: user.id, name: who(user) }, "invoice", `Bank transfer sent for ${inv!.number}${reference ? ` (ref ${reference})` : ""}, waiting for ZDMINC to check`);
+  redirect(`${path}?msg=${encodeURIComponent("Thanks! ZDMINC will check the transfer and mark the invoice paid, usually within one working day.")}`);
 }
 
 /** Pay an open invoice online. Makes a fresh Fygaro link if there isn't one or it may have expired. */

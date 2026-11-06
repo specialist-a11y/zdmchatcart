@@ -5,7 +5,9 @@ import { QrButton } from "@/components/QrButton";
 import { shortUrl } from "@/lib/links";
 import { cleanHours, hasHours } from "@/lib/hours";
 import { THEMES, change, shopScore, specialActive } from "@/lib/shop-front";
-import { quickLink, saveShopFront } from "./front-actions";
+import { quickLink, saveSeo, saveShopFront } from "./front-actions";
+import SeoCard from "./SeoCard";
+import { shopDescription, shopTitle } from "@/lib/seo";
 
 const PAID = ["paid", "ready", "fulfilled"];
 const DAY = 864e5;
@@ -26,7 +28,7 @@ const CSS = `
 
 /** Top of the Website page: is the shop working, one thing to improve, and a link for today's post. */
 export default async function WebsiteResults({ supabase, business, slug, canEdit, shopUrl, domain, made }: {
-  supabase: SupabaseClient; business: { id: string; name: string; logo_url: string | null; brand_color: string; description?: string | null };
+  supabase: SupabaseClient; business: { id: string; name: string; logo_url: string | null; brand_color: string; description?: string | null; tagline?: string | null; address?: string | null; currency: string };
   slug: string; canEdit: boolean; shopUrl: string; domain: string | null; made?: string;
 }) {
   const now = Date.now();
@@ -39,6 +41,7 @@ export default async function WebsiteResults({ supabase, business, slug, canEdit
     supabase.from("products").select("image_url").eq("business_id", business.id).eq("active", true),
     supabase.from("short_links").select("code, ref, clicks").eq("business_id", business.id),
   ]);
+  const { data: seo } = await supabase.from("businesses").select("seo_title, seo_description, google_verification, site_template").eq("id", business.id).maybeSingle();
   const inWeek = (iso: string) => iso >= wk, inPrev = (iso: string) => iso >= prev && iso < wk;
   const count = (rows: any[] | null, f: (r: any) => boolean) => (rows ?? []).filter(f).length;
   const stats = (w: (iso: string) => boolean) => ({
@@ -59,6 +62,7 @@ export default async function WebsiteResults({ supabase, business, slug, canEdit
     logo: !!business.logo_url, colour: !!business.brand_color && business.brand_color.toUpperCase() !== "#0F7C7E", domain: !!domain,
     products: prods?.length ?? 0, withPhotos: (prods ?? []).filter((p) => p.image_url).length,
     hours: hasHours(cleanHours(front?.hours)), about: !!business.description?.trim(), special, base: `/dashboard/${slug}`,
+    seo: !!seo?.seo_description?.trim() || (business.description?.trim().length ?? 0) >= 70,
   });
   const todo = score.items.filter((i) => !i.done);
 
@@ -129,6 +133,10 @@ export default async function WebsiteResults({ supabase, business, slug, canEdit
           {bestLink && bestLink.orders > 0 && <span style={{ fontSize: 14 }}>🏆 /{bestLink.code}: {bestLink.orders} order{bestLink.orders === 1 ? "" : "s"} this month</span>}
         </section>
       </div>
+
+      <SeoCard slug={slug} url={shopUrl} action={saveSeo} canEdit={canEdit}
+        autoTitle={shopTitle({ ...business, site_template: seo?.site_template })} autoDescription={shopDescription(business)}
+        title={seo?.seo_title ?? ""} description={seo?.seo_description ?? ""} verification={seo?.google_verification ?? ""} />
 
       <form id="front" action={saveShopFront} className="card stack" style={{ gap: 12 }}>
         <input type="hidden" name="slug" value={slug} />

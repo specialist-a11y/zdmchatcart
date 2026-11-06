@@ -27,6 +27,7 @@ export default async function ClientsPage({ searchParams }: { searchParams: Prom
   const mrr = live.reduce((n: number, r: any) => n + Number(r.plan?.monthly_price ?? 0), 0);
   const health = (r: any) =>
     overdueSet.has(r.business_id) || r.status === "past_due" ? ["Payment overdue", "overdue"] :
+    r.status === "pending_payment" ? ["New signup, setup unpaid", "high"] :
     r.status !== "active" ? [r.status, r.status] :
     openBy.get(r.business_id) ? [`${openBy.get(r.business_id)} open ticket${openBy.get(r.business_id)! > 1 ? "s" : ""}`, "sent"] : ["Healthy", ""];
 

@@ -1,3 +1,4 @@
+import { gateSection } from "@/components/PlanLock";
 import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import Link from "next/link";
@@ -25,6 +26,8 @@ export default async function CustomersPage({ params, searchParams }: {
   searchParams: Promise<{ stage?: string; tag?: string }>;
 }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "customers");
+  if (lock) return lock;
   const { stage: raw = "all", tag } = await searchParams;
   const stage = (STAGES as readonly string[]).includes(raw) ? raw : "all";
   const { supabase, business } = await requireMembership(slug);

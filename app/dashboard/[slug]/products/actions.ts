@@ -32,6 +32,11 @@ export type ProductInput = {
   lead_days?: string;
   pairs_with?: string;
   badge?: string;
+  // Rental mode (migration 0021)
+  rental?: boolean;
+  rental_unit?: string;
+  deposit?: string;
+  min_days?: string;
 };
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
@@ -70,7 +75,7 @@ export async function saveProduct(slug: string, input: ProductInput) {
     description: input.description.trim().slice(0, 1000) || null,
     category: input.category.trim().slice(0, 40) || null,
     price_note: input.price_note.trim().slice(0, 30) || null,
-    price: Math.round(basePrice * 100) / 100, stock, image_url: image || null, active: input.active, variants: vs,
+    price: Math.round(basePrice * 100) / 100, stock: stock as number | null, image_url: image || null, active: input.active, variants: vs,
   };
   const extras = {
     images: (input.images ?? []).map((u) => u.trim()).filter((u) => /^https:\/\//.test(u) && u !== image).slice(0, 8),
@@ -79,7 +84,20 @@ export async function saveProduct(slug: string, input: ProductInput) {
     pairs_with: input.pairs_with && /^[0-9a-f-]{36}$/i.test(input.pairs_with) && input.pairs_with !== input.id ? input.pairs_with : null,
     badge: ["bestseller", "new", "preorder", "none"].includes(input.badge ?? "") ? input.badge : null,
   };
+  const isRental = input.kind === "product" && !!input.rental;
+  const rental = {
+    rental: isRental,
+    rental_unit: input.rental_unit === "night" ? "night" : "day",
+    deposit: Math.max(0, Math.round((Number(input.deposit) || 0) * 100) / 100),
+    min_days: Math.min(30, Math.max(1, Math.floor(Number(input.min_days) || 1))),
+  };
+  // A rental's stock is how many you own: 1 if left blank.
+  if (isRental && row.stock === null) row.stock = 1;
   const client = db(supabase);
+  const saveRental = async (id: string) => {
+    const { error } = await client.from("products").update(rental).eq("id", id).eq("business_id", business.id);
+    return error && isRental ? "Saved, but rental settings need migration 0021_rentals.sql." : null;
+  };
   // Save the extras separately so items still save before migration 0016 has run.
   const saveExtras = async (id: string) => {
     const { error } = await client.from("products").update(extras).eq("id", id).eq("business_id", business.id);
@@ -89,14 +107,14 @@ export async function saveProduct(slug: string, input: ProductInput) {
   if (input.id) {
     const { error } = await client.from("products").update(row).eq("id", input.id).eq("business_id", business.id);
     if (error) return { error: needsMigration(error.message) };
-    const warn = await saveExtras(input.id);
+    const warn = (await saveExtras(input.id)) ?? (await saveRental(input.id));
     if (warn) return { error: warn };
   } else {
     // New items go to the end of the list.
     const { data: last } = await client.from("products").select("sort_order").eq("business_id", business.id).order("sort_order", { ascending: false }).limit(1).maybeSingle();
     const { data: made, error } = await client.from("products").insert({ ...row, business_id: business.id, sort_order: (last?.sort_order ?? 0) + 1 }).select("id").single();
     if (error) return { error: needsMigration(error.message) };
-    const warn = made ? await saveExtras(made.id) : null;
+    const warn = made ? (await saveExtras(made.id)) ?? (await saveRental(made.id)) : null;
     if (warn) return { error: warn };
   }
   revalidatePath(page(slug));

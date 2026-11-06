@@ -122,6 +122,26 @@ export const GUIDES: Guide[] = [
     link: { label: "Make a short link", path: "website#links" },
     keywords: "link tracking story bio flyer ref code clicks",
   },
+  {
+    id: "google-search", section: "Your website", minutes: 5,
+    title: "Get found on Google",
+    summary: "Help people searching for what you sell, near them, find your shop and your products.",
+    steps: [
+      "Go to Website, then Google search. The box at the top shows how your shop looks in a Google result.",
+      "Write a title that says what you sell and where, like \"Black cake and sweetbread in Holetown\". Keep it under 60 characters.",
+      "Write a description of 120 to 160 characters: what's special, and that people can order online and pay by card.",
+      "Add a photo and a short description to every product. Each product has its own page Google can show, like yourshop.com/p/black-cake.",
+      "Set your address and opening hours in Business info. Google uses them for local searches and \"open now\".",
+      "If you have your own domain, verify it in Google Search Console, paste the code into Website, Google search, then add your sitemap: yourdomain.com/sitemap.xml.",
+    ],
+    tips: [
+      "Google takes days to weeks to pick up changes. Keep sharing your links; visits help.",
+      "Use the words your customers use. \"Rum cake\" and \"black cake\" are both searched.",
+      "Your Instagram and Facebook links in Business info help Google connect your shop to your pages.",
+    ],
+    link: { label: "Open Google search", path: "website#seo" },
+    keywords: "seo google search found ranking search console sitemap description title",
+  },
 
   /* Products and services ---------------------------------------------------------------- */
   {

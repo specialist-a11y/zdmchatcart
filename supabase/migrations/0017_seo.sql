@@ -44,3 +44,19 @@ begin
     update public.products set slug = private.product_slug(r.business_id, r.name, r.id) where id = r.id;
   end loop;
 end $$;
+
+-- A shop's live custom domain (for canonical links), and every live domain (for sitemaps). Domains are public in DNS anyway.
+create or replace function public.domain_for_shop(p_slug text)
+returns text language sql stable security definer set search_path = '' as $$
+  select d.domain from public.business_domains d join public.businesses b on b.id = d.business_id
+  where b.slug = p_slug and d.status = 'active' order by d.created_at limit 1;
+$$;
+create or replace function public.active_shop_domains()
+returns table (slug text, domain text) language sql stable security definer set search_path = '' as $$
+  select distinct on (b.slug) b.slug, d.domain from public.business_domains d join public.businesses b on b.id = d.business_id
+  where d.status = 'active' order by b.slug, d.created_at;
+$$;
+revoke execute on function public.domain_for_shop(text) from public;
+revoke execute on function public.active_shop_domains() from public;
+grant execute on function public.domain_for_shop(text) to anon, authenticated;
+grant execute on function public.active_shop_domains() to anon, authenticated;

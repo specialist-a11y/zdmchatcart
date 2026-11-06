@@ -1,8 +1,11 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { parseInbound, verifyMetaSignature } from "@/lib/whatsapp";
-import { extractOrderCode, needsPrice, orderReply } from "@/lib/order-text";
-import { ensurePaymentLink, sendFromBusiness } from "@/lib/payments";
+import { createHash } from "node:crypto";
+import { downloadWhatsAppMedia, parseInbound, verifyMetaSignature } from "@/lib/whatsapp";
+import { extractOrderCode, money, needsPrice, orderReply } from "@/lib/order-text";
+import { rentalLine } from "@/lib/rental";
+import { ensurePaymentLink, getIntegration, sendFromBusiness } from "@/lib/payments";
+import { claimsPaid, findReference, proofPath, transferInstructions, wantsTransfer } from "@/lib/transfer";
 import { setConsent, upsertCustomer } from "@/lib/customers";
 import { consentCommand, startReply, stopReply } from "@/lib/journeys";
 import { awayDue, awayText, cleanHours, matchFaq, openState } from "@/lib/hours";
@@ -62,6 +65,9 @@ export async function POST(req: Request) {
       }
       continue;
     }
+    // Bank transfer (migration 0018): on only with bank details saved.
+    const { data: bank } = await admin.from("businesses").select("bank_transfer_enabled, bank_details").eq("id", businessId).maybeSingle<any>();
+    const transferOn = !!(bank?.bank_transfer_enabled && bank.bank_details?.trim());
     const code = extractOrderCode(msg.text);
 
     let orderId: string | null = null;
@@ -69,10 +75,12 @@ export async function POST(req: Request) {
 
     if (code) {
       // products(kind) tells bookings from orders; fall back without it if the join isn't available.
-      const find = (items: string) => admin.from("orders").select(`id, code, status, total, currency, customer_id, fulfillment, order_items(${items})`)
+      const find = (cols: string, items: string) => admin.from("orders").select(`id, code, status, total, currency, customer_id, fulfillment${cols}, order_items(${items})`)
         .eq("business_id", businessId).eq("code", code).maybeSingle<any>();
-      let { data: order, error: findErr } = await find("name, unit_price, quantity, products(kind)");
-      if (findErr) order = (await find("name, unit_price, quantity")).data;
+      const extra = ", payment_method, rental_start, rental_end, rental_days, rental_unit, pickup_time, deposit";
+      let { data: order, error: findErr } = await find(extra, "name, unit_price, quantity, products(kind)");
+      if (findErr) ({ data: order, error: findErr } = await find("", "name, unit_price, quantity, products(kind)"));
+      if (findErr) order = (await find("", "name, unit_price, quantity")).data;
       if (order) {
         orderId = order.id;
         if (!order.customer_id && customerId) {
@@ -87,12 +95,24 @@ export async function POST(req: Request) {
           const items = order.order_items ?? [];
           // Price-on-request items: the owner sets the price first, then sends the link from the order page.
           const url = needsPrice(items) ? null : await ensurePaymentLink(admin, order.id);
-          reply = orderReply({
-            code: order.code, items, total: order.total, currency: order.currency, paymentUrl: url,
-            // Already chose pickup or delivery at checkout, so don't ask again.
-            hasProducts: !order.fulfillment && items.some((i: any) => i.products?.kind !== "service"),
-            anyServices: items.some((i: any) => i.products?.kind === "service"),
-          });
+          const hasProducts = !order.fulfillment && !order.rental_start && items.some((i: any) => i.products?.kind !== "service");
+          const anyServices = items.some((i: any) => i.products?.kind === "service");
+          const rental = rentalLine(order, order.rental_unit ?? "day");
+          const dep = rental && Number(order.deposit ?? 0) > 0 ? "\nThe deposit is refunded when everything comes back in good condition." : "";
+          if (transferOn && order.payment_method === "transfer" && !needsPrice(items)) {
+            // Chose bank transfer on the website: send the bank details with the order code as reference.
+            if (order.status === "awaiting_confirmation") await admin.from("orders").update({ status: "awaiting_payment" }).eq("id", order.id);
+            const base = orderReply({ code: order.code, items, total: order.total, currency: order.currency, paymentUrl: null, hasProducts: false, anyServices });
+            reply = `${base.split("\n\n")[0]}${rental ? `\n${rental}${dep}` : ""}\n\n${transferInstructions({ code: order.code, amount: money(order.total, order.currency) }, bank.bank_details, url)}${hasProducts ? "\n\nReply PICKUP or DELIVERY so we know how to get it to you." : ""}`;
+          } else {
+            reply = orderReply({
+              code: order.code, items, total: order.total, currency: order.currency, paymentUrl: url,
+              // Already chose pickup or delivery at checkout, so don't ask again.
+              hasProducts, anyServices,
+            });
+            if (rental) reply = reply.replace("\n\n", `\n${rental}${dep}\n\n`);
+            if (url && transferOn) reply = reply.replace(url, `${url}\nOr reply TRANSFER to pay by bank transfer (1st Pay or any bank).`);
+          }
           const { data: when } = await admin.from("orders").select("slot_at, delivery_address").eq("id", order.id).maybeSingle();
           if (order.fulfillment || when?.slot_at) {
             const t = when?.slot_at ? new Date(when.slot_at).toLocaleString("en-GB", { timeZone: "America/Barbados", weekday: "long", day: "numeric", month: "short", hour: "numeric", minute: "2-digit", hour12: true }).replace(":00", "") : null;
@@ -108,8 +128,44 @@ export async function POST(req: Request) {
 
     await admin.from("messages").insert({
       business_id: businessId, customer_id: customerId, order_id: orderId,
-      channel: "whatsapp", direction: "in", body: msg.text, external_id: msg.messageId,
+      channel: "whatsapp", direction: "in", body: msg.media ? `[Photo]${msg.text ? " " + msg.text : ""}` : msg.text, external_id: msg.messageId,
     });
+
+    // Bank transfer: switch to transfer, or receive the screenshot / reference for the latest unpaid order.
+    if (!reply && !code && transferOn && customerId) {
+      const { data: open } = await admin
+        .from("orders").select("id, code, total, currency, status, payment_method")
+        .eq("business_id", businessId).eq("customer_id", customerId)
+        .in("status", ["awaiting_confirmation", "awaiting_payment", "transfer_pending"])
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (open) {
+        const ref = msg.media ? null : findReference(msg.text);
+        if (open.status !== "transfer_pending" && !msg.media && wantsTransfer(msg.text)) {
+          await admin.from("orders").update({ payment_method: "transfer", status: "awaiting_payment" }).eq("id", open.id);
+          orderId = open.id;
+          reply = transferInstructions({ code: open.code, amount: money(open.total, open.currency) }, bank.bank_details, await ensurePaymentLink(admin, open.id));
+        } else if (open.payment_method === "transfer" && (msg.media || ref)) {
+          const patch: Record<string, unknown> = { status: "transfer_pending", transfer_submitted_at: new Date().toISOString() };
+          if (ref) patch.transfer_reference = ref;
+          if (msg.media) {
+            const wa = await getIntegration(admin, businessId, "whatsapp");
+            const file = wa?.secret ? await downloadWhatsAppMedia(msg.media.id, wa.secret) : null;
+            if (file) {
+              const path = proofPath(businessId, open.id, file.mime.split("/")[1] ?? "jpg");
+              const up = await admin.storage.from("transfer-proofs").upload(path, file.bytes, { contentType: file.mime, upsert: false });
+              if (!up.error) { patch.transfer_proof_path = path; patch.transfer_proof_hash = createHash("sha256").update(file.bytes).digest("hex"); }
+            }
+            if (msg.text) { const capRef = findReference(msg.text); if (capRef) patch.transfer_reference = capRef; }
+          }
+          await admin.from("orders").update(patch).eq("id", open.id);
+          orderId = open.id;
+          reply = `Thank you! We've got your ${msg.media ? "screenshot" : "reference"} for order ${open.code}. We'll check our account and send your receipt as soon as it shows.`;
+        } else if (open.payment_method === "transfer" && open.status === "awaiting_payment" && claimsPaid(msg.text)) {
+          orderId = open.id;
+          reply = `Thanks! To match your payment to order ${open.code}, please send the screenshot or the transfer reference number.`;
+        }
+      }
+    }
 
     // Pickup or delivery answer for the customer's latest open order.
     if (!reply && /\b(pickup|pick up|delivery)\b/i.test(msg.text) && customerId) {

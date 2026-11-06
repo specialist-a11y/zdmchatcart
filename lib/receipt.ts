@@ -46,6 +46,7 @@ export function receiptModel(r: ReceiptInput) {
   const vat = r.vatRate ? total - total / (1 + r.vatRate) : null;
   const txn = r.order.fygaro_transaction_id;
   const cash = txn === "manual";
+  const transfer = !!txn && txn.startsWith("transfer:");
   const first = (r.customerName ?? "").trim().split(/\s+/)[0] || null;
   return {
     business: r.business.name.toUpperCase(),
@@ -62,8 +63,8 @@ export function receiptModel(r: ReceiptInput) {
     vat: vat == null ? null : { rate: `${+(r.vatRate! * 100).toFixed(2)}%`, amount: two(vat) },
     total: two(total),
     currency: r.order.currency,
-    payment: cash ? "Cash / in person" : "Card link",
-    ref: !txn || cash ? null : txn.length > 12 ? `${txn.slice(0, 4)}...${txn.slice(-3)}` : txn,
+    payment: cash ? "Cash / in person" : transfer ? "Bank transfer" : "Card link",
+    ref: !txn || cash ? null : transfer ? (txn.slice(9) === "confirmed" ? null : txn.slice(9)) : txn.length > 12 ? `${txn.slice(0, 4)}...${txn.slice(-3)}` : txn,
     thanks: first ? `Thank you, ${first}!` : "Thank you!",
     pickupNote: r.order.fulfillment === "delivery" ? "Keep this receipt for your delivery." : "Show this receipt at pickup.",
   };

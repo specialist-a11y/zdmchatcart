@@ -1,4 +1,5 @@
 import "server-only";
+import { hasFeature } from "./entitlements";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { dailySummary } from "./journeys";
 import { alertOwner } from "./nightly";
@@ -37,6 +38,8 @@ export async function runSummaries(admin: Admin, now = Date.now()) {
   for (const b of list ?? []) {
     const { count } = await admin.from("subscriptions").select("business_id", { count: "exact", head: true }).eq("business_id", b.id).in("status", ["trial", "active", "past_due"]);
     if (!count) continue;
+    // The daily summary comes with Growth and up.
+    if (!(await hasFeature(b.id, "daily_summary", admin))) continue;
     if (await alertOwner(admin, b.id, "other", `summary:${date}`, await summaryFor(admin, b, now))) sent++;
   }
   return { sent };

@@ -42,3 +42,21 @@ export async function quickLink(f: FormData) {
   }
   back(`${page(slug)}#today`, "Try a different short name");
 }
+
+/** Google title, description and Search Console verification. */
+export async function saveSeo(f: FormData) {
+  const slug = str(f, "slug");
+  const { db, business } = await requireEditor(slug, page(slug));
+  const raw = str(f, "google_verification");
+  // People often paste the whole <meta> tag; keep only the code.
+  const code = (raw.match(/content=["']([^"']+)["']/)?.[1] ?? raw).trim();
+  if (code && !/^[A-Za-z0-9_-]{10,100}$/.test(code)) back(`${page(slug)}#seo`, "That verification code doesn't look right. Paste the code from Google's HTML tag.");
+  const { error } = await db.from("businesses").update({
+    seo_title: str(f, "seo_title").slice(0, 70) || null,
+    seo_description: str(f, "seo_description").slice(0, 170) || null,
+    google_verification: code || null,
+  }).eq("id", business.id);
+  revalidatePath(page(slug));
+  revalidatePath(`/s/${slug}`);
+  back(`${page(slug)}#seo`, error ? "This needs a database update: run supabase/migrations/0017_seo.sql." : "Saved. Google picks up changes the next time it visits.");
+}

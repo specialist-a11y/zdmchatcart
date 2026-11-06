@@ -113,6 +113,8 @@ th { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spa
 .crm-nav a:hover { background: rgba(255,255,255,.06); color: #fff; }
 .crm-nav a[aria-current="page"] { background: rgba(61,139,255,.12); color: #fff; box-shadow: inset 3px 0 0 var(--blue); }
 .crm-nav a[aria-current="page"] svg { color: var(--blue); }
+.crm-nav a.is-locked { color: #7d8984; }
+.crm-lock { border: 1px solid rgba(255,255,255,.18); color: #9aa6a1; border-radius: 999px; padding: 0 7px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .crm-badge { background: var(--blue); color: var(--ink); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 800; }
 .crm-foot { margin-top: auto; display: flex; flex-direction: column; gap: 10px; font-size: 13px; color: #c4ccc8; }
 .crm-foot a { color: var(--blue); }
@@ -145,6 +147,7 @@ th { font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spa
 .insight small { color: #c4ccc8; }
 .insight > div { display: flex; flex-direction: column; gap: 4px; }
 .insight > div + div { border-left: 1px solid #26302c; padding-left: 16px; }
+.insight-lock { grid-column: 2 / -1; }
 .insight .tag { font-size: 11px; font-weight: 800; letter-spacing: .1em; color: var(--blue); }
 .insight .tag.kill { color: #ff8a80; }
 .bars { display: flex; align-items: flex-end; gap: 10px; height: 170px; padding-top: 18px; }
@@ -186,6 +189,7 @@ table td.wrap, table th.wrap { white-space: normal; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .kpi > b { font-size: 26px; }
   .insight { grid-template-columns: 1fr; }
+  .insight-lock { grid-column: auto; }
   .insight > div + div { border-left: 0; padding-left: 0; border-top: 1px solid #26302c; padding-top: 12px; }
   .chat, .split { grid-template-columns: 1fr; }
   .cols { grid-template-columns: 1fr !important; }
@@ -210,3 +214,23 @@ table td.wrap, table th.wrap { white-space: normal; }
 .cols > *, .grid > *, .chat > *, .split > *, .kpis > *, .insight > *, .crm-main > * { min-width: 0; }
 .badge.wa { background: #dcf8c6; color: #146c43; }
 .badge.ig { background: #fbe3f0; color: #9b1f63; }
+
+/* Plan feature ticks (admin billing) and rental mode */
+.planfeat { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; padding: 4px 0 6px; font-size: 13px; }
+.planfeat label { display: flex; align-items: center; gap: 6px; font-weight: 500; }
+.planfeat label input[type=number] { width: 110px; }
+
+.rental-bar { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px 16px; margin-bottom: 18px; }
+.rental-bar > strong { flex: 1 0 100%; font-size: 17px; }
+.rental-bar label { flex: 1 1 150px; }
+.rental-bar > span { flex: 1 1 200px; padding-bottom: 10px; }
+.rental-opts { border: 1px dashed var(--line); border-radius: 12px; padding: 10px 12px; }
+.rental-opts summary { cursor: pointer; font-weight: 700; }
+.rental-opts[open] summary { margin-bottom: 10px; }
+.rental-opts .chk, label.chk { flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+.rental-opts .chk input { width: auto; }
+.rental-grid th, .rental-grid td { text-align: center; padding: 8px 6px; font-size: 13px; white-space: nowrap; }
+.rental-grid th:first-child, .rental-grid td:first-child { text-align: left; white-space: normal; min-width: 160px; }
+.rental-grid td.full { background: #fbe3dc; color: #a33a22; font-weight: 800; }
+.rental-grid td.part { background: #fff3d6; font-weight: 700; }
+.rental-grid td.free { color: #2f7d5b; }

@@ -11,7 +11,8 @@ import { deleteProduct, getProductPhotoUrl, reorder, saveProduct, setActive, set
 export type Item = {
   id: string; kind: "product" | "service"; name: string; description: string | null; category: string | null;
   price: number; price_note: string | null; stock: number | null; image_url: string | null; active: boolean; variants: unknown; featured?: boolean;
-  images?: string[]; ready_days?: string[]; lead_days?: number; pairs_with?: string | null; badge?: string | null;
+  images?: string[]; ready_days?: string[]; lead_days?: number; pairs_with?: string | null; badge?: string | null; slug?: string | null;
+  rental?: boolean; rental_unit?: string | null; deposit?: number | null; min_days?: number | null;
 };
 const WEEK = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]] as const;
 
@@ -66,6 +67,7 @@ const CSS = `
 const blank = (kind: "product" | "service"): ProductInput => ({
   kind, name: "", description: "", category: "", price: "", price_note: kind === "service" ? "" : "", stock: "", image_url: "", active: true, hasOptions: false,
   variants: [{ name: "", price: "", available: true }], images: [], ready_days: [], lead_days: "", pairs_with: "", badge: "",
+  rental: false, rental_unit: "day", deposit: "", min_days: "1",
 });
 
 function toInput(p: Item): ProductInput {
@@ -76,6 +78,7 @@ function toInput(p: Item): ProductInput {
     image_url: p.image_url ?? "", active: p.active, hasOptions: vs.length > 0,
     variants: vs.length ? vs.map((v) => ({ id: v.id, name: v.name, price: String(v.price), available: v.available })) : [{ name: "", price: "", available: true }],
     images: p.images ?? [], ready_days: p.ready_days ?? [], lead_days: p.lead_days ? String(p.lead_days) : "", pairs_with: p.pairs_with ?? "", badge: p.badge ?? "",
+    rental: !!p.rental, rental_unit: p.rental_unit === "night" ? "night" : "day", deposit: p.deposit ? String(p.deposit) : "", min_days: String(p.min_days ?? 1),
   };
 }
 
@@ -243,6 +246,9 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
               <input type="file" accept="image/*" style={{ display: "none" }} disabled={uploading} onChange={(e) => uploadPhoto(e.target.files?.[0])} />
             </label>
 
+            {form.id && items.find((i) => i.id === form.id)?.slug && (
+              <span className="muted" style={{ fontSize: 13 }}>Its own page: <a href={`/s/${slug}/p/${items.find((i) => i.id === form.id)!.slug}`} target="_blank" rel="noreferrer">/p/{items.find((i) => i.id === form.id)!.slug}</a>. Google can find it; share it in posts.</span>
+            )}
             <label>Name<input value={form.name} onChange={(e) => set({ name: e.target.value })} placeholder={form.kind === "service" ? "Gel manicure" : "Black cake"} autoFocus maxLength={120} /></label>
             <label>Description <span className="muted" style={{ fontWeight: 400 }}>(optional)</span>
               <textarea rows={3} value={form.description} onChange={(e) => set({ description: e.target.value })} maxLength={1000}
@@ -345,6 +351,28 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                 <span className="muted" style={{ fontSize: 13 }}>Automatic badges: Bestseller from your paid orders in the last 30 days, Pre-order when it has ready days or an order-ahead time, Sold out at 0 stock.</span>
               </div>
             </details>
+
+            {form.kind === "product" && (
+              <details className="stack" style={{ gap: 10 }} open={!!form.rental}>
+                <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Rental settings</summary>
+                <div className="stack" style={{ gap: 10, marginTop: 6 }}>
+                  <label className="pe-switch">
+                    <input type="checkbox" checked={!!form.rental} onChange={(e) => set({ rental: e.target.checked })} />
+                    <span>Rent this out (customers pick dates)</span>
+                  </label>
+                  {form.rental && (
+                    <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))" }}>
+                      <label>Charged per
+                        <select value={form.rental_unit ?? "day"} onChange={(e) => set({ rental_unit: e.target.value })}><option value="day">Day</option><option value="night">Night</option></select>
+                      </label>
+                      <label>Refundable deposit ({currency})<input type="number" min="0" step="0.01" inputMode="decimal" value={form.deposit ?? ""} onChange={(e) => set({ deposit: e.target.value })} placeholder="0" /></label>
+                      <label>Minimum {form.rental_unit === "night" ? "nights" : "days"}<input type="number" min="1" max="30" inputMode="numeric" value={form.min_days ?? "1"} onChange={(e) => set({ min_days: e.target.value })} /></label>
+                    </div>
+                  )}
+                  <span className="muted" style={{ fontSize: 13 }}>For rentals, Stock is how many you own (1 if blank). It doesn&apos;t go down when rented: each booking holds units for its dates. The price is per {form.rental_unit === "night" ? "night" : "day"}.</span>
+                </div>
+              </details>
+            )}
 
             <label className="pe-switch">
               <input type="checkbox" checked={form.active} onChange={(e) => set({ active: e.target.checked })} />

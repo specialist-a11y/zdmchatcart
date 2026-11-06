@@ -1,3 +1,6 @@
+import { todayIn } from "@/lib/billing";
+import { getEntitlements } from "@/lib/entitlements";
+import { has } from "@/lib/plan-features";
 import Link from "next/link";
 import { requireMembership } from "@/lib/business";
 import { money } from "@/lib/order-text";
@@ -16,8 +19,10 @@ const dayKey = (iso: string) => new Intl.DateTimeFormat("en-CA", { timeZone: tz 
 export default async function TodayPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
   const { slug } = await params;
   const { msg } = await searchParams;
-  const { supabase, business, user } = await requireMembership(slug);
+  const { supabase, business, user, viewingAsStaff } = await requireMembership(slug);
   const base = `/dashboard/${slug}`;
+  const ent = await getEntitlements(business.id);
+  const reporting = viewingAsStaff || has(ent, "reporting");
   const now = Date.now();
   const since30 = new Date(now - 30 * DAY).toISOString();
   const [{ data: orders }, { data: products }, { data: msgs }, { count: newCustomers }, { count: adsOk }, { count: toChoose }, { count: noPhone }, { count: quiet }, { data: openOrders }] = await Promise.all([
@@ -32,6 +37,12 @@ export default async function TodayPage({ params, searchParams }: { params: Prom
     supabase.from("orders").select("code, status, total, created_at, customers(name, phone)").eq("business_id", business.id)
       .in("status", ["awaiting_payment", "awaiting_confirmation"]).order("created_at", { ascending: false }).limit(6),
   ]);
+  // Rentals going out or due back today.
+  const todayIso = todayIn();
+  const [{ count: pickupsToday }, { count: returnsToday }] = await Promise.all([
+    supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("rental_start", todayIso).is("picked_up_at", null).not("status", "in", "(cancelled,abandoned)"),
+    supabase.from("orders").select("id", { count: "exact", head: true }).eq("business_id", business.id).lte("rental_end", todayIso).not("picked_up_at", "is", null).is("returned_at", null),
+  ]);
   const all = (orders ?? []) as unknown as OrderLite[];
   const paid = all.filter((o) => PAID.includes(o.status));
   const todayKey = dayKey(new Date().toISOString());
@@ -41,6 +52,7 @@ export default async function TodayPage({ params, searchParams }: { params: Prom
   const sum = (xs: OrderLite[]) => xs.reduce((s, o) => s + Number(o.total), 0);
   const change = sum(paidLastWeekSame) > 0 ? Math.round(((sum(paidToday) - sum(paidLastWeekSame)) / sum(paidLastWeekSame)) * 100) : null;
   const awaiting = all.filter((o) => o.status === "awaiting_payment");
+  const transfers = all.filter((o) => o.status === "transfer_pending");
   const carts = all.filter((o) => o.status === "abandoned");
 
   // Last 7 days of paid sales
@@ -79,6 +91,8 @@ export default async function TodayPage({ params, searchParams }: { params: Prom
     ...(waiting.length > 3 ? [{ key: "chats", icon: "inbox", t: `${waiting.length - 3} more chat${waiting.length - 3 > 1 ? "s" : ""} waiting`, d: "Oldest first in the inbox.", go: "Open inbox", href: `${base}/inbox` }] : []),
     ...unpaid.slice(0, 3).map((o: any): Need => ({ key: o.code, icon: "card", t: `${o.code} unpaid ${ago(o.created_at, now)}`, d: `${who(o.customers)} · ${money(o.total, business.currency)}`, go: "Send link", code: o.customers?.phone ? o.code : undefined, href: `${base}/orders/${o.code}` })),
     ...(awaiting.length > 3 ? [{ key: "unpaid", icon: "card", t: `${awaiting.length - 3} more unpaid`, d: `${money(sum(awaiting), business.currency)} waiting in all.`, go: "See orders", href: `${base}/orders?status=awaiting_payment` }] : []),
+    ...(transfers.length ? [{ key: "transfers", icon: "card", t: `${transfers.length} bank transfer${transfers.length > 1 ? "s" : ""} to check`, d: `${money(sum(transfers), business.currency)} to look for in your account.`, go: "Check", href: transfers.length === 1 ? `${base}/orders/${(transfers[0] as any).code}` : `${base}/orders?status=transfer_pending` }] : []),
+    ...((pickupsToday || returnsToday) ? [{ key: "rentals", icon: "orders", t: [pickupsToday ? `${pickupsToday} rental pickup${pickupsToday > 1 ? "s" : ""}` : "", returnsToday ? `${returnsToday} return${returnsToday > 1 ? "s" : ""} due` : ""].filter(Boolean).join(" and ") + " today", d: "See what goes out and comes back.", go: "Schedule", href: `${base}/orders/rentals` }] : []),
     ...unconfirmed.slice(0, 2).map((o: any): Need => ({ key: o.code, icon: "orders", t: `${o.code} not confirmed`, d: "Started on the website, not confirmed in WhatsApp yet.", go: "Open", href: `${base}/orders/${o.code}` })),
     ...((noPhone ?? 0) > 2 ? [{ key: "unconf", icon: "orders", t: `${(noPhone ?? 0) - 2} more to confirm`, d: "Website orders waiting for the customer's WhatsApp message.", go: "Review", href: `${base}/orders?status=awaiting_confirmation` }] : []),
     ...(quiet ? [{ key: "quiet", icon: "customers", t: `${quiet} customer${quiet > 1 ? "s" : ""} went quiet`, d: "No order or message in 45 days or more.", go: "Win back", href: `${base}/customers?stage=quiet` }] : []),
@@ -97,9 +111,11 @@ export default async function TodayPage({ params, searchParams }: { params: Prom
       {msg && <p className={/^Not sent|more than 24|Connect|not found|no customer/i.test(msg) ? "error" : "ok"}>{msg}</p>}
       <section className="insight" aria-label="Zero guesswork">
         <div><h2>Zero guesswork</h2><small>What the last 30 days say</small></div>
+        {reporting ? <>
         <div><span className="tag">SCALE</span><b>{tips.scale.title}</b><small>{tips.scale.detail}</small></div>
         <div><span className="tag kill">KILL</span><b>{tips.kill.title}</b><small>{tips.kill.detail}</small></div>
         <div><span className="tag">TIMING</span><b>{tips.timing.title}</b><small>{tips.timing.detail}</small></div>
+        </> : <div className="insight-lock"><b>Sales tips come with Pro and up</b><small>See what to push, what to drop and the best time to post, worked out from your own orders. <Link href={`${base}/billing`} style={{ color: "inherit", textDecoration: "underline" }}>See plans</Link></small></div>}
       </section>
 
       <div className="kpis">

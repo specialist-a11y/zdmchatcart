@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { runDuePosts } from "@/lib/publish";
 import { runSummaries } from "@/lib/summary";
+import { transferReminders } from "@/lib/transfer-reminders";
 
 export const maxDuration = 60;
 
@@ -12,6 +13,6 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const admin = createAdminClient();
-  const [posts, summaries] = await Promise.all([runDuePosts(admin), runSummaries(admin)]);
-  return NextResponse.json({ ok: true, ...posts, summaries });
+  const [posts, summaries, transfers] = await Promise.all([runDuePosts(admin), runSummaries(admin), transferReminders(admin)]);
+  return NextResponse.json({ ok: true, ...posts, summaries, transfers });
 }

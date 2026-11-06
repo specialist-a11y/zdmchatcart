@@ -151,7 +151,7 @@ export const specialActive = (text: string | null | undefined, endsAt: string | 
 export type ScoreItem = { key: string; label: string; done: boolean; todo: string; href: string };
 /** Shop score: the details that sell, each a one-minute job. */
 export function shopScore(s: {
-  logo: boolean; colour: boolean; domain: boolean; products: number; withPhotos: number; hours: boolean; about: boolean; special: boolean; base: string;
+  logo: boolean; colour: boolean; domain: boolean; products: number; withPhotos: number; hours: boolean; about: boolean; special: boolean; base: string; seo?: boolean;
 }) {
   const items: ScoreItem[] = [
     { key: "logo", label: "Logo and colours", done: s.logo && s.colour, todo: "Add your logo and brand colour", href: `${s.base}/business` },
@@ -159,6 +159,7 @@ export function shopScore(s: {
     { key: "photos", label: "A photo on every product", done: s.products > 0 && s.withPhotos >= s.products, todo: s.products - s.withPhotos > 0 ? `Add photos to ${s.products - s.withPhotos} product${s.products - s.withPhotos === 1 ? "" : "s"}` : "Add product photos", href: `${s.base}/products` },
     { key: "hours", label: "Opening hours", done: s.hours, todo: "Set your opening hours", href: `${s.base}/business#hours` },
     { key: "about", label: "About your business", done: s.about, todo: "Write two lines about your business", href: `${s.base}/business` },
+    { key: "seo", label: "Google search description", done: !!s.seo, todo: "Write how you show up on Google", href: `${s.base}/website#seo` },
     { key: "special", label: "Specials strip", done: s.special, todo: "Add this week's special", href: `${s.base}/website#front` },
     { key: "domain", label: "Own domain", done: s.domain, todo: "Connect your own domain", href: `${s.base}/website#domain` },
   ];

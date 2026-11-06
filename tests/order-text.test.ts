@@ -100,3 +100,11 @@ test("WhatsApp reply: pickup question only for products", () => {
   const order = orderReply({ code: "CC-1", items, total: 60, currency: "BBD", paymentUrl: null, hasProducts: true, anyServices: false });
   assert.match(order, /your order[\s\S]*payment link shortly[\s\S]*PICKUP/);
 });
+test("receipt shows bank transfers", () => {
+  const base = { business: { name: "Shop" }, items: [] as any[] };
+  const t = receiptModel({ ...base, order: { code: "S-2", total: 85, currency: "BBD", created_at: "2026-11-03T13:41:00Z", fygaro_transaction_id: "transfer:TRX0042183" } });
+  assert.equal(t.payment, "Bank transfer");
+  assert.equal(t.ref, "TRX0042183");
+  const n = receiptModel({ ...base, order: { code: "S-3", total: 85, currency: "BBD", created_at: "2026-11-03T13:41:00Z", fygaro_transaction_id: "transfer:confirmed" } });
+  assert.equal(n.ref, null);
+});

@@ -1,3 +1,4 @@
+import { gateSection } from "@/components/PlanLock";
 import Link from "next/link";
 import { requireMembership } from "@/lib/business";
 import { money } from "@/lib/order-text";
@@ -6,12 +7,14 @@ import { Icon } from "@/components/Icon";
 import { num } from "@/lib/crm-nav";
 import { bulkFulfilled, bulkReady } from "./bulk-actions";
 
-const FILTERS = ["all", "awaiting_confirmation", "awaiting_payment", "paid", "ready", "fulfilled", "abandoned", "cancelled"] as const;
-const LABEL: Record<string, string> = { awaiting_confirmation: "Awaiting confirmation", awaiting_payment: "Awaiting payment", paid: "Paid", ready: "Ready", fulfilled: "Collected", abandoned: "Cart left", cancelled: "Cancelled" };
+const FILTERS = ["all", "awaiting_confirmation", "awaiting_payment", "transfer_pending", "paid", "ready", "fulfilled", "abandoned", "cancelled"] as const;
+const LABEL: Record<string, string> = { awaiting_confirmation: "Awaiting confirmation", awaiting_payment: "Awaiting payment", transfer_pending: "Transfer to check", paid: "Paid", ready: "Ready", fulfilled: "Collected", abandoned: "Cart left", cancelled: "Cancelled" };
 const SOURCE: Record<string, [string, string]> = { web: ["Website", "website"], whatsapp: ["WhatsApp", "wa"], instagram: ["Instagram", "ig"], manual: ["Added by hand", "orders"] };
 
 export default async function OrdersPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ status?: string; msg?: string }> }) {
   const { slug } = await params;
+  const lock = await gateSection(slug, "orders");
+  if (lock) return lock;
   const { status = "all", msg } = await searchParams;
   const { supabase, business } = await requireMembership(slug);
 
@@ -20,10 +23,11 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
     .eq("business_id", business.id).order("created_at", { ascending: false }).limit(100);
   if (status !== "all") query = query.eq("status", status);
   const since = new Date(Date.now() - 24 * 3600 * 1000).toISOString();
-  const [{ data: orders }, { data: counts }, { data: today }] = await Promise.all([
+  const [{ data: orders }, { data: counts }, { data: today }, { count: rentals }] = await Promise.all([
     query,
     supabase.from("orders").select("status").eq("business_id", business.id).gte("created_at", new Date(Date.now() - 90 * 864e5).toISOString()),
     supabase.from("orders").select("total").eq("business_id", business.id).in("status", ["paid", "ready", "fulfilled"]).gte("paid_at", since),
+    supabase.from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("rental", true),
   ]);
   const n = (s: string) => (counts ?? []).filter((o) => s === "all" || o.status === s).length;
   const paidToday = (today ?? []).reduce((s, o) => s + Number(o.total), 0);
@@ -32,7 +36,7 @@ export default async function OrdersPage({ params, searchParams }: { params: Pro
   return (
     <div className="stack">
       <PageHeader n={num("orders")} title="Orders" sub="Every order from the website, WhatsApp and Instagram, with its payment status."
-        actions={<><Link className="btn secondary small" href={`/dashboard/${slug}/orders/slips`}>Packing slips</Link><Link className="btn secondary small" href={`/s/${slug}`} target="_blank">View shop</Link></>} />
+        actions={<>{(rentals ?? 0) > 0 && <Link className="btn secondary small" href={`/dashboard/${slug}/orders/rentals`}>Rental schedule</Link>}<Link className="btn secondary small" href={`/dashboard/${slug}/orders/slips`}>Packing slips</Link><Link className="btn secondary small" href={`/s/${slug}`} target="_blank">View shop</Link></>} />
       {msg && <p className={/^Tick|Only/.test(msg) ? "error" : "ok"}>{msg}</p>}
       <div className="kpis">
         <Kpi label="Paid in the last 24 hours" value={money(paidToday, business.currency)} sub={`${today?.length ?? 0} orders`} tone="blue" />

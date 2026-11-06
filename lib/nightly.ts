@@ -1,4 +1,6 @@
 import "server-only";
+import { hasFeature } from "./entitlements";
+import { transferReminders } from "./transfer-reminders";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { cartReminderText, reminderDue, templateValues } from "./journeys";
 import { tokenState, walletLow, type TokenState } from "./health";
@@ -43,13 +45,21 @@ export async function sendTemplate(admin: Admin, businessId: string, to: string,
 /** One reminder per unpaid order, 20 to 47 hours after it was made. Free text inside the 24-hour window, else an approved template. */
 async function cartReminders(admin: Admin) {
   const since = new Date(Date.now() - 47 * 3600_000).toISOString();
-  const { data: orders, error } = await admin.from("orders")
-    .select("id, business_id, code, total, currency, created_at, customer_id, customers(name, phone, opted_out_at), businesses(name)")
+  const find = (extra: string) => admin.from("orders")
+    .select(`id, business_id, code, total, currency, created_at, customer_id${extra}, customers(name, phone, opted_out_at), businesses(name)`)
     .in("status", ["awaiting_confirmation", "awaiting_payment"]).is("reminder_sent_at", null).gt("created_at", since).limit(500);
+  let { data: orders, error } = await find(", payment_method");
+  if (error) ({ data: orders, error } = await find(""));
   if (error) return { sent: 0, error: error.message };
   let sent = 0;
+  const allowed = new Map<string, boolean>();
   for (const o of (orders ?? []) as any[]) {
+    // Bank transfer orders get their own reminder (lib/transfer-reminders.ts).
+    if (o.payment_method === "transfer") continue;
     if (!reminderDue(o.created_at) || !o.customers?.phone || o.customers.opted_out_at) continue;
+    // Cart recovery comes with Growth and up.
+    if (!allowed.has(o.business_id)) allowed.set(o.business_id, await hasFeature(o.business_id, "cart_recovery", admin));
+    if (!allowed.get(o.business_id)) continue;
     const { data: last } = await admin.from("messages").select("created_at").eq("customer_id", o.customer_id).eq("direction", "in")
       .order("created_at", { ascending: false }).limit(1).maybeSingle();
     const url = Number(o.total) > 0 ? await ensurePaymentLink(admin, o.id) : null;
@@ -111,6 +121,7 @@ async function ownerAlerts(admin: Admin) {
 export async function runNightly(admin: Admin) {
   const { data: stages, error } = await admin.rpc("run_stage_job");
   const reminders = await cartReminders(admin);
+  const transfers = await transferReminders(admin).catch((e) => ({ sent: 0, error: String(e?.message ?? e) }));
   const owners = await ownerAlerts(admin);
-  return { stages: error ? { error: error.message } : stages, reminders, ...owners };
+  return { stages: error ? { error: error.message } : stages, reminders, transfers, ...owners };
 }

@@ -7,6 +7,7 @@ import { cleanHours } from "@/lib/hours";
 import { badgeFor, fulfilmentChip, readyText, readZones, sharedReadyDays, slotOptions, sourceOf, specialActive, theme as shopTheme, themeVars } from "@/lib/shop-front";
 import { SHOP_CSS } from "./shop-css";
 import { FRONT_CSS } from "./front-css";
+import { addDays, MAX_DAYS, pickupOptions, prettyDate, unitLabel } from "@/lib/rental";
 
 const WA_ICON = (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.5l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.2 5.2 0 0 0 1.1 2.8 11.9 11.9 0 0 0 4.6 4c1.7.7 2.4.8 3.2.7a2.8 2.8 0 0 0 1.8-1.3 2.3 2.3 0 0 0 .2-1.3c-.1-.1-.3-.2-.5-.3Z" /></svg>
@@ -16,7 +17,8 @@ const BADGE_TEXT: Record<string, string> = { bestseller: "Bestseller", new: "New
 type Product = {
   id: string; name: string; description: string | null; price: number; image_url: string | null; stock: number | null;
   kind?: "product" | "service"; category?: string | null; price_note?: string | null; variants?: unknown; featured?: boolean;
-  images?: string[] | null; ready_days?: string[] | null; lead_days?: number | null; pairs_with?: string | null; badge?: string | null;
+  images?: string[] | null; ready_days?: string[] | null; lead_days?: number | null; pairs_with?: string | null; badge?: string | null; slug?: string | null;
+  rental?: boolean | null; rental_unit?: string | null; deposit?: number | string | null; min_days?: number | null;
 };
 type Business = {
   name: string; slug: string; tagline: string | null; logo_url: string | null; brand_color: string; currency: string; whatsapp_number: string | null;
@@ -26,6 +28,8 @@ type Business = {
   hero_headline?: string | null; hero_subheadline?: string | null; hero_text?: string | null;
   shop_theme?: string | null; special_text?: string | null; special_ends_at?: string | null; announcement?: string | null;
   delivery_zones?: unknown; pickup_enabled?: boolean | null; slot_minutes?: number | null; hours?: unknown;
+  bank_transfer_enabled?: boolean | null;
+  rental_agreement_url?: string | null; rental_pickup_times?: string | null; rental_lead_days?: number | null;
 };
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: unknown } }
@@ -45,7 +49,10 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme }: {
+export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme, basePath, initialFocus, today }: {
+  today?: string;
+  basePath?: string;
+  initialFocus?: string | null;
   openNow?: { open: boolean; label: string; reason: string } | null;
   best?: string[];
   previewTheme?: string | null;
@@ -59,7 +66,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [cart, setCart] = useState<Record<string, number>>({});
   const [picks, setPicks] = useState<Record<string, string>>({});
   const [open, setOpen] = useState(false);
-  const [focus, setFocus] = useState<Product | null>(null);
+  const [focus, setFocus] = useState<Product | null>(() => products.find((p) => p.id === initialFocus) ?? null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [optIn, setOptIn] = useState(false);
@@ -76,8 +83,55 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [shown, setShown] = useState(0); // bumps when checkout opens, so time slots are worked out in the browser
   const [photo, setPhoto] = useState(0);
   const [activeCat, setActiveCat] = useState<string>("");
+  const [payBy, setPayBy] = useState<"card" | "transfer">("card");
+  // Rental mode: shoppers pick dates first, then see what's free for those dates.
+  const hasRentals = products.some((p) => p.rental);
+  const earliest = addDays(today ?? new Date().toISOString().slice(0, 10), Math.max(0, business.rental_lead_days ?? 0));
+  const unit = products.find((p) => p.rental)?.rental_unit ?? "day";
+  const [start, setStart] = useState(earliest);
+  const [days, setDays] = useState(() => Math.max(1, products.find((p) => p.rental)?.min_days ?? 1));
+  const [free, setFree] = useState<Record<string, number> | null>(null);
+  const [dateError, setDateError] = useState("");
+  const times = pickupOptions(business.rental_pickup_times);
+  const [pickupTime, setPickupTime] = useState("");
+  const [agreed, setAgreed] = useState(false);
+  useEffect(() => {
+    if (!hasRentals) return;
+    let live = true;
+    setFree(null); setDateError("");
+    const timer = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/rentals/availability?slug=${encodeURIComponent(business.slug)}&start=${start}&days=${days}`);
+        const j = await r.json();
+        if (!live) return;
+        if (!r.ok) { setDateError(j.error ?? "Couldn't check those dates"); return; }
+        setFree(j.free);
+      } catch { if (live) setDateError("Couldn't check those dates. Try again."); }
+    }, 250);
+    return () => { live = false; clearTimeout(timer); };
+  }, [hasRentals, start, days, business.slug]);
   const th = shopTheme(previewTheme ?? business.shop_theme);
   const preview = !!(previewTemplate || previewTheme);
+  // Every product has its own address (good for Google and for sharing). Opening one updates the address bar.
+  const home = basePath ?? `/s/${business.slug}`;
+  const productHref = (p: Product) => `${home}/p/${p.slug || p.id}`;
+  const openProduct = (p: Product) => {
+    setPhoto(0);
+    setFocus(p);
+    if (!preview && basePath !== undefined) try { window.history.pushState({ product: p.id }, "", productHref(p) + window.location.search); } catch {}
+  };
+  const closeProduct = () => {
+    setFocus(null);
+    if (!preview && basePath !== undefined && /\/p\/[^/]+$/.test(window.location.pathname)) try { window.history.pushState({}, "", (home || "/") + window.location.search); } catch {}
+  };
+  useEffect(() => {
+    const onPop = () => {
+      const m = window.location.pathname.match(/\/p\/([^/]+)$/);
+      setFocus(m ? products.find((p) => p.slug === m[1] || p.id === m[1]) ?? null : null);
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [products]);
   // Ads tracking: only with a Pixel set up, and only after the visitor says yes.
   const pixel = business.meta_pixel_id && /^\d{8,20}$/.test(business.meta_pixel_id) ? business.meta_pixel_id : null;
   const [consent, setConsent] = useState<"unknown" | "yes" | "no">("unknown");
@@ -151,22 +205,41 @@ export default function ShopClient({ business, products, attribution, previewTem
       const v = p.opts.find((x) => x.id === variantId && x.available);
       return v ? { p, v, name: `${p.name} (${v.name})`, price: v.price } : null;
     }
+    // Rentals cost the daily price times the days booked.
+    if (p.rental) return variantId ? null : { p, v: null as Variant | null, name: `${p.name} · ${days} ${unitLabel(p.rental_unit, days)}`, price: Number(p.price) * days };
     return variantId ? null : { p, v: null as Variant | null, name: p.name, price: Number(p.price) };
   }
   const lines = Object.entries(cart).flatMap(([key, q]) => { const l = q > 0 ? line(key) : null; return l ? [{ key, q, ...l }] : []; });
   const count = lines.reduce((s, l) => s + l.q, 0);
-  const total = lines.reduce((s, l) => s + l.price * l.q, 0);
+  const cartHasRental = lines.some((l) => l.p.rental);
+  const deposit = lines.reduce((s, l) => s + (l.p.rental ? Number(l.p.deposit ?? 0) * l.q : 0), 0);
+  const total = lines.reduce((s, l) => s + l.price * l.q, 0) + deposit;
+  const rentalReady = !cartHasRental || (!!free && !dateError && (!times.length || !!pickupTime) && (!business.rental_agreement_url || agreed));
+  // Dates changed: keep rental items within what's free.
+  useEffect(() => {
+    if (!free) return;
+    setCart((c) => {
+      let changed = false;
+      const next = { ...c };
+      for (const [key, q] of Object.entries(c)) {
+        const p = byId.get(splitKey(key).productId);
+        if (p?.rental && q > (free[p.id] ?? 0)) { next[key] = free[p.id] ?? 0; changed = true; }
+      }
+      return changed ? next : c;
+    });
+  }, [free, byId]);
   const onRequest = lines.some((l) => l.price === 0);
-  const hasGoods = lines.some((l) => l.p.kind !== "service");
+  // Rentals have their own pickup date and time, so pickup or delivery is only asked for other goods.
+  const hasGoods = !cartHasRental && lines.some((l) => l.p.kind !== "service");
   const zone = mode === "delivery" ? zones.find((z) => z.id === zoneId) ?? null : null;
   const fee = zone?.fee ?? 0;
   const grand = total + fee;
   const hours = useMemo(() => cleanHours(business.hours), [business.hours]);
-  const slots = useMemo(() => (shown && Object.keys(hours).length ? slotOptions(hours, {
+  const slots = useMemo(() => (shown && !cartHasRental && Object.keys(hours).length ? slotOptions(hours, {
     slotMinutes: business.slot_minutes ?? 120,
     leadDays: Math.max(0, ...lines.map((l) => l.p.lead_days ?? 0)),
     readyDays: sharedReadyDays(lines.map((l) => l.p)),
-  }) : []), [shown, hours, business.slot_minutes, lines.map((l) => l.key).join()]); // eslint-disable-line react-hooks/exhaustive-deps
+  }) : []), [shown, cartHasRental, hours, business.slot_minutes, lines.map((l) => l.key).join()]); // eslint-disable-line react-hooks/exhaustive-deps
   const choices = [...(pickupOn ? ["pickup" as const] : []), ...(zones.length ? ["delivery" as const] : [])];
   useEffect(() => { if (hasGoods && choices.length === 1 && mode !== choices[0]) setMode(choices[0]); }, [hasGoods, choices.length, choices[0], mode]); // eslint-disable-line react-hooks/exhaustive-deps
   const inCart = (productId: string) => lines.filter((l) => l.p.id === productId).reduce((s, l) => s + l.q, 0);
@@ -176,7 +249,7 @@ export default function ShopClient({ business, products, attribution, previewTem
     if (!l) return;
     setCart((c) => {
       const others = inCart(l.p.id) - (c[key] ?? 0);
-      const max = l.p.stock == null ? 99 : Math.max(0, l.p.stock - others);
+      const max = l.p.rental ? Math.max(0, (free?.[l.p.id] ?? 0) - others) : l.p.stock == null ? 99 : Math.max(0, l.p.stock - others);
       return { ...c, [key]: Math.min(max, Math.max(0, (c[key] ?? 0) + delta)) };
     });
     if (delta > 0) { track("AddToCart", { content_ids: [l.p.id], content_type: "product", content_name: l.name, value: l.price }); trackShop("cart"); }
@@ -184,6 +257,9 @@ export default function ShopClient({ business, products, attribution, previewTem
   const pickFor = (p: { id: string; opts: Variant[] }) => picks[p.id] ?? p.opts.find((v) => v.available)?.id ?? null;
 
   async function checkout() {
+    if (cartHasRental && !free) return setError("Pick your rental dates first");
+    if (cartHasRental && times.length && !pickupTime) return setError("Choose a pickup time");
+    if (cartHasRental && business.rental_agreement_url && !agreed) return setError("Please accept the rental agreement");
     if (hasGoods && choices.length > 1 && !mode) return setError("Choose pickup or delivery");
     if (mode === "delivery" && zones.length && !zone) return setError("Choose your delivery area");
     if (mode === "delivery" && !address.trim()) return setError("Add the delivery address");
@@ -201,6 +277,8 @@ export default function ShopClient({ business, products, attribution, previewTem
           phone: phone || undefined,
           optIn,
           marketing,
+          paymentMethod: business.bank_transfer_enabled ? payBy : undefined,
+          rental: cartHasRental ? { start, days, pickupTime: pickupTime || undefined, agreed } : undefined,
           attribution: ref ?? undefined,
           fbc: consent === "yes" ? fbc ?? undefined : undefined,
           fulfillment: hasGoods && mode ? mode : undefined,
@@ -255,7 +333,9 @@ export default function ShopClient({ business, products, attribution, previewTem
     const key = cartKey(p.id, vid);
     const q = cart[key] ?? 0;
     const allOut = item.opts.length > 0 && !item.opts.some((v) => v.available);
-    const soldOut = p.stock === 0 || allOut;
+    const left = p.rental ? (free ? free[p.id] ?? 0 : null) : null;
+    const waiting = !!p.rental && (left === null || !!dateError);
+    const soldOut = p.rental ? left === 0 : p.stock === 0 || allOut;
     return (
       <div className="s-buy">
         {item.opts.length > 0 && (
@@ -269,9 +349,11 @@ export default function ShopClient({ business, products, attribution, previewTem
           </div>
         )}
         <div className="s-buyrow">
-          <strong className="s-price">{priceText(p, item.opts.find((v) => v.id === vid))}</strong>
-          {soldOut ? (
-            <span className="s-out">{p.kind === "service" ? "Unavailable" : "Sold out"}</span>
+          <strong className="s-price">{priceText(p, item.opts.find((v) => v.id === vid))}{p.rental ? ` / ${unitLabel(p.rental_unit)}` : ""}</strong>
+          {waiting ? (
+            <span className="s-out">{dateError ? "Pick dates" : "Checking..."}</span>
+          ) : soldOut ? (
+            <span className="s-out">{p.rental ? "Booked those dates" : p.kind === "service" ? "Unavailable" : "Sold out"}</span>
           ) : q === 0 ? (
             <button className={`s-add${big ? " big" : ""}`} onClick={(e) => { e.stopPropagation(); change(key, 1); }}>{t.add}</button>
           ) : (
@@ -282,6 +364,13 @@ export default function ShopClient({ business, products, attribution, previewTem
             </div>
           )}
         </div>
+        {p.rental && (Number(p.deposit ?? 0) > 0 || (p.min_days ?? 1) > 1 || (left !== null && left > 0 && left <= 3)) && (
+          <small className="s-rentnote">
+            {[Number(p.deposit ?? 0) > 0 ? `${money(Number(p.deposit), business.currency)} refundable deposit` : null,
+              (p.min_days ?? 1) > 1 ? `minimum ${p.min_days} ${unitLabel(p.rental_unit, p.min_days ?? 1)}` : null,
+              left !== null && left > 0 && left <= 3 ? `${left} free on your dates` : null].filter(Boolean).join(" · ")}
+          </small>
+        )}
       </div>
     );
   }
@@ -296,7 +385,11 @@ export default function ShopClient({ business, products, attribution, previewTem
     const b = badgeFor({ ...p, allOut: !!item?.opts.length && !item.opts.some((v) => v.available) }, best$);
     return b ? <span className={`s-badgechip ${b}`}>{BADGE_TEXT[b]}</span> : null;
   };
-  const tap = (p: Product) => ({ role: "button" as const, tabIndex: 0, onClick: () => { setPhoto(0); setFocus(p); }, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === "Enter") { setPhoto(0); setFocus(p); } }, "aria-label": `${p.name}, details` });
+  const tap = (p: Product) => ({ onClick: () => openProduct(p) });
+  /** The product name as a real link, so search engines can follow it. */
+  const NameLink = ({ p }: { p: Product }) => (
+    <a href={productHref(p)} className="s-plink" onClick={(e) => { e.preventDefault(); e.stopPropagation(); openProduct(p); }}>{p.name}</a>
+  );
   const special = specialActive(business.special_text, business.special_ends_at) ? business.special_text!.trim() : null;
   const chip = fulfilmentChip(zones, pickupOn, business.currency);
   const named = groups.filter(([c]) => c);
@@ -354,6 +447,16 @@ export default function ShopClient({ business, products, attribution, previewTem
       <main id="items" className="s-wrap s-main">
         {special && <div className="s-special" role="note"><b>Special:</b> {special}</div>}
         {products.length === 0 && <p className="s-empty">Nothing here yet. Check back soon.</p>}
+        {hasRentals && (
+          <section className="s-rentbar" aria-label="Rental dates">
+            <strong>When do you need it?</strong>
+            <label>Pick up<input type="date" value={start} min={earliest} max={addDays(earliest, 365)} onChange={(e) => e.target.value && setStart(e.target.value)} /></label>
+            <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+              {Array.from({ length: MAX_DAYS }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n} {unitLabel(unit, n)}</option>)}
+            </select></label>
+            <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : <>Return {prettyDate(addDays(start, days))}{free ? "" : " · checking..."}</>}</span>
+          </section>
+        )}
         {named.length > 1 && (
           <nav className="s-catnav" aria-label="Categories">
             <div>
@@ -371,7 +474,7 @@ export default function ShopClient({ business, products, attribution, previewTem
                   <article key={p.id} className="s-row" {...tap(p)}>
                     {p.image_url && <div className="s-thumb" style={{ position: "relative" }}><Img p={p} /></div>}
                     <div className="s-rowtext">
-                      <div className="s-rowhead"><h3>{p.name}</h3><span className="s-dots" aria-hidden="true" /></div>
+                      <div className="s-rowhead"><h3><NameLink p={p} /></h3><span className="s-dots" aria-hidden="true" /></div>
                       {p.description && <p>{p.description}</p>}
                       <Buy p={p} />
                     </div>
@@ -381,11 +484,11 @@ export default function ShopClient({ business, products, attribution, previewTem
             ) : t.layout === "gallery" ? (
               <div className="s-gallery">
                 {items.map((p) => (
-                  <button key={p.id} type="button" className="s-piece" onClick={() => setFocus(p)} aria-label={`View ${p.name}`}>
+                  <a key={p.id} href={productHref(p)} className="s-piece" onClick={(e) => { e.preventDefault(); openProduct(p); }} aria-label={`View ${p.name}`}>
                     <Img p={p} plain />
                     <span className="s-caption"><b>{p.name}</b><span>{priceText(p)}</span></span>
                     {inCart(p.id) > 0 && <span className="s-badge">✓</span>}
-                  </button>
+                  </a>
                 ))}
               </div>
             ) : (
@@ -395,7 +498,7 @@ export default function ShopClient({ business, products, attribution, previewTem
                     {badge(p)}
                     {(t.id === "classic" || th || p.image_url) && <div className="s-cardimg" style={{ position: "relative" }}><Img p={p} /></div>}
                     <div className="s-cardbody">
-                      <h3>{p.name}</h3>
+                      <h3><NameLink p={p} /></h3>
                       {p.description && <p>{p.description}</p>}
                       <Buy p={p} />
                     </div>
@@ -425,9 +528,9 @@ export default function ShopClient({ business, products, attribution, previewTem
       </main>
 
       {focus && t.layout === "gallery" && (
-        <div className="s-modal" role="dialog" aria-modal="true" aria-label={focus.name} onClick={() => setFocus(null)}>
+        <div className="s-modal" role="dialog" aria-modal="true" aria-label={focus.name} onClick={closeProduct}>
           <div className="s-modalbox" onClick={(e) => e.stopPropagation()}>
-            <button className="s-close" onClick={() => setFocus(null)} aria-label="Close">✕</button>
+            <button className="s-close" onClick={closeProduct} aria-label="Close">✕</button>
             {focus.image_url && <img src={focus.image_url} alt={focus.name} />}
             <div className="s-modaltext">
               <h3>{focus.name}</h3>
@@ -443,9 +546,9 @@ export default function ShopClient({ business, products, attribution, previewTem
         const ready = readyText(focus);
         const pair = focus.pairs_with ? byId.get(focus.pairs_with) : undefined;
         return (
-          <div className="s-sheetwrap" role="dialog" aria-modal="true" aria-label={focus.name} onClick={() => setFocus(null)}>
+          <div className="s-sheetwrap" role="dialog" aria-modal="true" aria-label={focus.name} onClick={closeProduct}>
             <div className="s-sheet" onClick={(e) => e.stopPropagation()} style={{ position: "relative" }}>
-              <button className="s-close2" onClick={() => setFocus(null)} aria-label="Close">✕</button>
+              <button className="s-close2" onClick={closeProduct} aria-label="Close">✕</button>
               {photos.length > 0 && (
                 <>
                   <div className="s-carousel" onScroll={(e) => { const el = e.currentTarget; setPhoto(Math.round(el.scrollLeft / el.clientWidth)); }}>
@@ -455,7 +558,7 @@ export default function ShopClient({ business, products, attribution, previewTem
                 </>
               )}
               <div className="s-sheetbody">
-                <div className="s-sheethead"><h3>{focus.name}</h3>{badge(focus)}</div>
+                <div className="s-sheethead">{focus.id === initialFocus ? <h1 style={{ margin: 0, fontSize: 28, textTransform: "uppercase" }}>{focus.name}</h1> : <h3>{focus.name}</h3>}{badge(focus)}</div>
                 {focus.description && <p style={{ margin: 0, color: "var(--muted)", lineHeight: 1.5 }}>{focus.description}</p>}
                 {ready && <span className="s-ready"><b>{ready.split(" · ")[0]}</b>{ready.includes(" · ") ? ` · ${ready.split(" · ").slice(1).join(" · ")}` : ""}</span>}
                 {pair && (
@@ -465,12 +568,12 @@ export default function ShopClient({ business, products, attribution, previewTem
                       {pair.image_url ? <img src={pair.image_url} alt="" /> : <span className="s-pairimg" />}
                       <span>{pair.name} · {priceText(pair)}</span>
                       {!pair.opts.length && pair.stock !== 0 && <button type="button" aria-label={`Add ${pair.name}`} onClick={() => change(cartKey(pair.id, null), 1)}>+</button>}
-                      {pair.opts.length > 0 && <button type="button" aria-label={`See ${pair.name}`} onClick={() => setFocus(pair)}>›</button>}
+                      {pair.opts.length > 0 && <a href={productHref(pair)} aria-label={`See ${pair.name}`} onClick={(e) => { e.preventDefault(); openProduct(pair); }} style={{ fontSize: 22, fontWeight: 800, textDecoration: "none", padding: "0 8px" }}>›</a>}
                     </div>
                   </div>
                 )}
                 <Buy p={focus} big />
-                {inCart(focus.id) > 0 && <button className="s-btn" onClick={() => setFocus(null)}>Done · {money(total, business.currency)} in your order</button>}
+                {inCart(focus.id) > 0 && <button className="s-btn" onClick={closeProduct}>Done · {money(total, business.currency)} in your order</button>}
               </div>
             </div>
           </div>
@@ -506,6 +609,7 @@ export default function ShopClient({ business, products, attribution, previewTem
                     <b>{l.price ? money(l.price * l.q, business.currency) : "On request"}</b>
                   </li>
                 ))}
+                {deposit > 0 && <li><span>Refundable deposit</span><span /><b>{money(deposit, business.currency)}</b></li>}
                 {fee > 0 && <li><span>Delivery · {zone!.name}</span><span /><b>{money(fee, business.currency)}</b></li>}
               </ul>
 
@@ -540,6 +644,33 @@ export default function ShopClient({ business, products, attribution, previewTem
                 </div>
               )}
 
+              {cartHasRental && (
+                <div className="stack" style={{ gap: 8 }}>
+                  <span><b>Rental:</b> pick up {prettyDate(start)}, return {prettyDate(addDays(start, days))} ({days} {unitLabel(unit, days)})</span>
+                  {times.length > 0 && (
+                    <label>Pickup time<select value={pickupTime} onChange={(e) => setPickupTime(e.target.value)}>
+                      <option value="">Choose a time</option>{times.map((x) => <option key={x} value={x}>{x}</option>)}
+                    </select></label>
+                  )}
+                  {business.rental_agreement_url && (
+                    <label className="s-check">
+                      <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
+                      <span>I accept the <a href={business.rental_agreement_url} target="_blank" rel="noreferrer">rental agreement</a></span>
+                    </label>
+                  )}
+                </div>
+              )}
+              {business.bank_transfer_enabled && (
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="s-small">How would you like to pay?</span>
+                  <div className="s-toggle" role="group" aria-label="How to pay">
+                    <button type="button" aria-pressed={payBy === "card"} onClick={() => setPayBy("card")}>Card link</button>
+                    <button type="button" aria-pressed={payBy === "transfer"} onClick={() => setPayBy("transfer")}>Bank transfer</button>
+                  </div>
+                  {payBy === "transfer" && <span style={{ fontSize: 14, color: "var(--muted)" }}>1st Pay or any bank. We send our account details on WhatsApp, with your order code as the reference.</span>}
+                </div>
+              )}
+
               <div className="s-fields">
                 <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
                 <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="Optional" /></label>
@@ -555,11 +686,11 @@ export default function ShopClient({ business, products, attribution, previewTem
               <div className="s-sheethead" style={{ fontSize: 18 }}><b>Total</b><b>{money(grand, business.currency)}{onRequest ? " + quote" : ""}</b></div>
               <ol className="s-how" aria-label="How ordering works">
                 <li>Your order code is typed for you in WhatsApp. Just press send.</li>
-                <li>We reply with a secure card payment link{onRequest ? " once the price is confirmed" : ""}.</li>
+                <li>{payBy === "transfer" && business.bank_transfer_enabled ? "We reply with our bank details. Send the transfer, then the screenshot." : `We reply with a secure card payment link${onRequest ? " once the price is confirmed" : ""}.`}</li>
                 <li>Your receipt arrives on WhatsApp.</li>
               </ol>
-              <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={busy || !business.whatsapp_number} onClick={checkout}>
-                {WA_ICON}{busy ? "Opening WhatsApp..." : "Order on WhatsApp"}
+              <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={busy || !business.whatsapp_number || !rentalReady} onClick={checkout}>
+                {WA_ICON}{busy ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp" : "Order on WhatsApp"}
               </button>
               {!business.whatsapp_number && <p style={{ margin: 0 }}>This business has not added its WhatsApp number yet.</p>}
               {error && <p className="s-err" role="alert">{error}</p>}

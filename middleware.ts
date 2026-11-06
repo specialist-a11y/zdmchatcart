@@ -41,6 +41,11 @@ export async function middleware(request: NextRequest) {
     if (slug) {
       const url = request.nextUrl.clone();
       if (path === "/" || path === `/s/${slug}`) { url.pathname = `/s/${slug}`; return NextResponse.rewrite(url); }
+      // islandcrumb.com/p/black-cake -> that shop's product page (its own address for Google and sharing)
+      const item = path.match(/^\/p\/([a-z0-9][a-z0-9-]{0,69}|[0-9a-f-]{36})$/i);
+      if (item) { url.pathname = `/s/${slug}/p/${item[1].toLowerCase()}`; return NextResponse.rewrite(url); }
+      // Search engines read these per domain (app/robots.ts and app/sitemap.ts look at the host).
+      if (path === "/robots.txt" || path === "/sitemap.xml" || path === "/favicon.ico") return NextResponse.next();
       // islandcrumb.com/cake -> that shop's short link "cake"
       const one = path.match(/^\/([a-z0-9][a-z0-9-]{1,39})$/i);
       if (one) { url.pathname = `/l/${one[1].toLowerCase()}`; url.searchParams.set("shop", slug); return NextResponse.rewrite(url); }
@@ -57,7 +62,7 @@ export async function middleware(request: NextRequest) {
     return NextResponse.rewrite(url);
   }
 
-  if (!path.startsWith("/dashboard") && !path.startsWith("/admin") && !path.startsWith("/login") && !path.startsWith("/auth") && !path.startsWith("/admin-login") && !path.startsWith("/admin-setup")) {
+  if (!path.startsWith("/dashboard") && !path.startsWith("/admin") && !path.startsWith("/login") && !path.startsWith("/auth") && !path.startsWith("/admin-login") && !path.startsWith("/admin-setup") && !path.startsWith("/signup")) {
     return NextResponse.next();
   }
 

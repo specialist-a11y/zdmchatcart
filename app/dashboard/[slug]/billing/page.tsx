@@ -4,14 +4,16 @@ import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { money } from "@/lib/staff";
 import { contactOverage, previewChange, todayIn } from "@/lib/billing";
-import { payInvoice, requestPlanChange, saveBillingDetails } from "./actions";
+import { payInvoice, requestPlanChange, saveBillingDetails, submitInvoiceTransfer } from "./actions";
+import { zdmBankDetails } from "@/lib/zdm-billing";
+import { CORE, featureLabel, entitlementsFrom } from "@/lib/plan-features";
 
 const pct = (a: number, b: number) => (b > 0 ? Math.min(100, Math.round((a / b) * 100)) : 0);
 const STATUS: Record<string, string> = { sent: "Due", overdue: "Overdue", paid: "Paid", void: "Cancelled", draft: "Draft" };
 
-export default async function BillingPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string }> }) {
+export default async function BillingPage({ params, searchParams }: { params: Promise<{ slug: string }>; searchParams: Promise<{ msg?: string; welcome?: string }> }) {
   const { slug } = await params;
-  const { msg } = await searchParams;
+  const { msg, welcome } = await searchParams;
   const { business, role } = await requireMembership(slug);
   const canEdit = role === "owner" || role === "admin";
   if (!canEdit) {
@@ -44,17 +46,56 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
   const open = (invoices ?? []).filter((i) => i.status === "sent" || i.status === "overdue");
   const lite = (p: any) => ({ id: p.id, name: p.name, monthly_price: Number(p.monthly_price), rank: p.rank });
   const today = todayIn();
+  const bank = await zdmBankDetails(admin);
+  const pendingStart = sub?.status === "pending_payment";
+  const checking = open.filter((i) => i.transfer_submitted_at);
+  const toPay = open.filter((i) => !i.transfer_submitted_at);
 
   return (
     <div className="stack">
       <PageHeader n={num("billing")} title="Plan and billing" sub="Your ZDM ChatCart plan, invoices from ZDMINC, and who we bill." />
       {msg && <p className="ok">{msg}</p>}
 
-      {open.length > 0 && (
-        <div className="card row" style={{ justifyContent: "space-between", background: open.some((i) => i.status === "overdue") ? "#fbe3dc" : "#fff8ec" }}>
-          <span><strong>{open.length === 1 ? `Invoice ${open[0].number} is ${open[0].status === "overdue" ? "overdue" : "due"}` : `${open.length} invoices to pay`}</strong> · {money(open.reduce((n, i) => n + Number(i.amount), 0))}</span>
-          <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={open[0].number} /><button className="btn blue small">Pay {open.length === 1 ? "now" : open[0].number} with Fygaro</button></form>
+      {welcome && pendingStart && (
+        <div className="card stack" style={{ background: "var(--teal-soft)" }}>
+          <h2>Welcome to ZDM ChatCart</h2>
+          <p style={{ margin: 0 }}>You picked <strong>{current?.name}</strong>. Pay your setup invoice below by card or bank transfer. Once it's in, ZDMINC sets up your payment account, WhatsApp, Instagram and your shop, and tests a live payment with you before launch.</p>
         </div>
+      )}
+
+      {checking.map((i) => (
+        <div key={i.id} className="card row" style={{ justifyContent: "space-between", background: "#eef6ff" }}>
+          <span><strong>Transfer sent for {i.number}</strong> · {money(i.amount)} · ZDMINC is checking it{i.transfer_reference ? ` (ref ${i.transfer_reference})` : ""}.</span>
+        </div>
+      ))}
+
+      {toPay.length > 0 && (
+        <section className="card stack" style={{ background: toPay.some((i) => i.status === "overdue") ? "#fbe3dc" : "#fff8ec" }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <span><strong>{toPay.length === 1 ? `Invoice ${toPay[0].number} is ${toPay[0].status === "overdue" ? "overdue" : "due"}` : `${toPay.length} invoices to pay`}</strong> · {money(toPay.reduce((n, i) => n + Number(i.amount), 0))}{toPay.length === 1 ? <span className="muted"> · {toPay[0].description}</span> : null}</span>
+            <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={toPay[0].number} /><button className="btn blue small">Pay {toPay.length === 1 ? "by card" : `${toPay[0].number} by card`}</button></form>
+          </div>
+          {bank && (
+            <details>
+              <summary style={{ cursor: "pointer", fontWeight: 700, minHeight: 44, display: "flex", alignItems: "center" }}>Pay by bank transfer (1st Pay or any bank)</summary>
+              <div className="cols" style={{ marginTop: 10 }}>
+                <div className="stack" style={{ gap: 6 }}>
+                  <span className="muted">Send exactly {money(toPay[0].amount)} to:</span>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap", fontFamily: "inherit", background: "#fff", border: "1px solid var(--line)", borderRadius: 10, padding: 10 }}>{bank}</pre>
+                  <span>Use <strong>{toPay[0].number}</strong> as the reference.</span>
+                </div>
+                <form action={submitInvoiceTransfer} className="stack" style={{ gap: 8 }}>
+                  <input type="hidden" name="slug" value={slug} />
+                  <label>Invoice<select name="invoice" defaultValue={toPay[0].id}>{toPay.map((i) => <option key={i.id} value={i.id}>{i.number} · {money(i.amount)}</option>)}</select></label>
+                  <label>Reference number from your bank<input name="reference" maxLength={60} placeholder="e.g. FT2611051234" /></label>
+                  <label>Screenshot or PDF of the transfer<input name="proof" type="file" accept="image/*,application/pdf" /></label>
+                  <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>I've sent it</button>
+                  <span className="muted" style={{ fontSize: 13 }}>ZDMINC checks the money is in its account, then marks the invoice paid.</span>
+                </form>
+              </div>
+            </details>
+          )}
+        </section>
       )}
 
       <div className="cols">
@@ -116,8 +157,18 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
               <div className="row" style={{ justifyContent: "space-between" }}><strong style={{ fontSize: 17 }}>{p.name}</strong>{isCurrent && <span className="badge paid">Current</span>}{p.id === sub?.pending_plan_id && <span className="badge high">From {sub?.current_period_end}</span>}</div>
               <span style={{ fontFamily: "Barlow Condensed, sans-serif", fontSize: 28, fontWeight: 800 }}>{money(p.monthly_price)}<span className="muted" style={{ fontSize: 14, fontWeight: 500 }}> /month</span></span>
               <span className="muted">{p.description}</span>
+              {Number(p.setup_fee) > 0 && pendingStart && <span style={{ fontSize: 13 }}>+ {money(p.setup_fee)} one-time setup</span>}
+              <details style={{ fontSize: 13 }}>
+                <summary style={{ cursor: "pointer" }}>What's included</summary>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                  {CORE.map((c) => <li key={c}>{c}</li>)}
+                  {entitlementsFrom(p, "active").features.map((k) => <li key={k}><strong>{featureLabel(k)}</strong></li>)}
+                </ul>
+              </details>
               <span className="muted" style={{ fontSize: 13 }}>{p.contacts_included.toLocaleString("en-US")} contacts included, then {money(p.extra_contacts_price)} per extra {p.extra_contacts_block.toLocaleString("en-US")}</span>
-              {isCurrent ? (
+              {pendingStart ? (
+                isCurrent ? <span className="muted" style={{ fontSize: 13 }}>Your plan. Pay the setup invoice to start.</span> : <button className="btn secondary small">Switch to {p.name}</button>
+              ) : isCurrent ? (
                 pending ? <button className="btn secondary small">Stay on {p.name}</button> : <span className="muted" style={{ fontSize: 13 }}>You're on this plan.</span>
               ) : pv ? (
                 <>
@@ -143,7 +194,9 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
                 <td>{i.due_date}</td>
                 <td><span className={`badge ${i.status}`}>{STATUS[i.status] ?? i.status}{i.paid_at ? ` ${new Date(i.paid_at).toLocaleDateString("en-GB", { day: "numeric", month: "short" })}` : ""}</span></td>
                 <td><div className="row" style={{ gap: 6, flexWrap: "nowrap" }}>
-                  {(i.status === "sent" || i.status === "overdue") && (
+                  {(i.status === "sent" || i.status === "overdue") && i.transfer_submitted_at && <span className="badge sent">Transfer checking</span>}
+                  {i.status === "paid" && i.paid_via === "transfer" && <span className="muted" style={{ fontSize: 12 }}>by transfer</span>}
+                  {(i.status === "sent" || i.status === "overdue") && !i.transfer_submitted_at && (
                     <form action={payInvoice}><input type="hidden" name="slug" value={slug} /><input type="hidden" name="number" value={i.number} /><button className="btn blue small">Pay</button></form>
                   )}
                   <a className="btn secondary small" href={`/dashboard/${slug}/billing/invoice/${encodeURIComponent(i.number)}`}>PDF</a>
@@ -154,7 +207,7 @@ export default async function BillingPage({ params, searchParams }: { params: Pr
           </tbody>
         </table>
       </div>
-      <p className="muted" style={{ margin: 0 }}>Payments go through Fygaro. Questions about a charge? Open a request in Help and support.</p>
+      <p className="muted" style={{ margin: 0 }}>Pay by card through Fygaro{bank ? " or by bank transfer (1st Pay or any bank)" : ""}. Questions about a charge? Open a request in Help and support.</p>
     </div>
   );
 }

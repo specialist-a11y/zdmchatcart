@@ -3,8 +3,9 @@ import { adminNum } from "@/lib/crm-nav";
 import { requireStaff, money } from "@/lib/staff";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { todayIn } from "@/lib/billing";
-import { zdmFygaro } from "@/lib/zdm-billing";
-import { newInvoice, remindInvoice, runBillingNow, savePlan, setInvoiceStatus } from "../actions";
+import { zdmBankDetails, zdmFygaro } from "@/lib/zdm-billing";
+import { FEATURES } from "@/lib/plan-features";
+import { confirmInvoiceTransfer, newInvoice, rejectInvoiceTransfer, remindInvoice, runBillingNow, savePlan, saveZdmBank, setInvoiceStatus } from "../actions";
 
 export default async function BillingPage({ searchParams }: { searchParams: Promise<{ msg?: string; s?: string }> }) {
   const { staff } = await requireStaff();
@@ -22,6 +23,17 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
     admin.from("plan_changes").select("*, businesses(name)").gte("created_at", monthStart).order("created_at", { ascending: false }),
     admin.from("businesses").select("id, name").order("name"),
   ]);
+  const [{ data: bank }, { data: transfers }] = await Promise.all([
+    admin.from("platform_settings").select("value").eq("key", "zdm_bank_details").maybeSingle(),
+    admin.from("invoices").select("id, number, amount, currency, description, transfer_reference, transfer_proof_path, transfer_submitted_at, businesses(name)").not("transfer_submitted_at", "is", null).in("status", ["sent", "overdue"]).order("transfer_submitted_at"),
+  ]);
+  const proofs = new Map<string, string>();
+  for (const t of transfers ?? []) {
+    if (!t.transfer_proof_path) continue;
+    const { data: u } = await admin.storage.from("transfer-proofs").createSignedUrl(t.transfer_proof_path, 3600);
+    if (u?.signedUrl) proofs.set(t.id, u.signedUrl);
+  }
+  const bankOn = !!(await zdmBankDetails(admin));
   const price = new Map((plans ?? []).map((p) => [p.id, Number(p.monthly_price)]));
   const live = (subs ?? []).filter((s) => s.status === "active" || s.status === "past_due");
   const mrr = live.reduce((n, s) => n + (price.get(s.plan_id) ?? 0), 0);
@@ -34,11 +46,33 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
   return (
     <>
       <div className="row" style={{ justifyContent: "space-between" }}>
-        <PageHeader n={adminNum("/admin/billing")} title="Plans and billing" sub={`Prices, invoices and every upgrade or downgrade. Invoices go out as Fygaro links on ZDMINC"s account. Contacts over a plan"s allowance are added to the renewal invoice.`} />
+        <PageHeader n={adminNum("/admin/billing")} title="Plans and billing" sub={`Prices, invoices and every upgrade or downgrade. Invoices go out as Fygaro links on ZDMINC's account, and can be paid by bank transfer too. Contacts over a plan's allowance are added to the renewal invoice.`} />
         {manager && <form action={runBillingNow}><button className="btn secondary small">Run renewals and reminders now</button></form>}
       </div>
       {sp.msg && <p className="ok">{sp.msg}</p>}
       {!zdmFygaro() && <p className="error">ZDMINC's Fygaro keys aren't set (ZDM_FYGARO_BUTTON_URL, ZDM_FYGARO_KEY_ID, ZDM_FYGARO_SECRET), so invoices are created without a payment link.</p>}
+      {(transfers ?? []).length > 0 && (
+        <section className="card stack" style={{ background: "#fff8ec" }}>
+          <h2>Bank transfers to check ({transfers!.length})</h2>
+          <p className="muted" style={{ margin: 0 }}>Check ZDMINC's bank account for each amount before confirming. A screenshot alone is not proof.</p>
+          {transfers!.map((t: any) => (
+            <div key={t.id} className="row" style={{ justifyContent: "space-between", alignItems: "flex-start", borderTop: "1px solid var(--line)", paddingTop: 10, flexWrap: "wrap" }}>
+              <span className="stack" style={{ gap: 2 }}>
+                <strong>{t.businesses?.name} · {t.number} · {money(t.amount, t.currency)}</strong>
+                <span className="muted">Reference: {t.transfer_reference || "none given"} · sent {new Date(t.transfer_submitted_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit", timeZone: "America/Barbados" })}</span>
+                {proofs.get(t.id) && <a href={proofs.get(t.id)} target="_blank" rel="noreferrer"><img src={proofs.get(t.id)} alt={`Transfer screenshot for ${t.number}`} style={{ maxWidth: 220, maxHeight: 300, borderRadius: 8, border: "1px solid var(--line)" }} /></a>}
+              </span>
+              {manager ? (
+                <span className="row" style={{ gap: 6 }}>
+                  <form action={confirmInvoiceTransfer}><input type="hidden" name="id" value={t.id} /><button className="btn blue small">Money received</button></form>
+                  <form action={rejectInvoiceTransfer}><input type="hidden" name="id" value={t.id} /><button className="btn secondary small">Not received</button></form>
+                </span>
+              ) : <span className="muted">A manager confirms transfers</span>}
+            </div>
+          ))}
+        </section>
+      )}
+
       <div className="kpis">
         <div className="kpi" style={{ background: "var(--teal-soft)" }}><span>Monthly recurring</span><b>{money(mrr)}</b></div>
         <div className="kpi"><span>Open invoices</span><b>{money(open.reduce((n, i) => n + Number(i.amount), 0))}</b></div>
@@ -68,6 +102,12 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
                     <input name="active" type="checkbox" defaultChecked={p.active} disabled={!manager} aria-label="On sale" />
                     <span>{count(p.id)}</span>
                     {manager ? <button className="btn secondary small">Save</button> : <span />}
+                    <div className="planfeat">
+                      <label>Setup fee (BBD)<input name="setup_fee" type="number" min="0" step="0.01" defaultValue={p.setup_fee} disabled={!manager} /></label>
+                      <label className="chk"><input name="self_serve" type="checkbox" defaultChecked={p.self_serve} disabled={!manager} /> On the signup page</label>
+                      <span className="muted" style={{ fontSize: 12 }}>Unlocks:</span>
+                      {FEATURES.map((ft) => <label key={ft.key} className="chk" title={ft.label}><input name={`f_${ft.key}`} type="checkbox" defaultChecked={(p.features ?? []).includes(ft.key) || (ft.key === "videos" && p.video_clips > 0)} disabled={!manager} /> {ft.label.split(" (")[0]}</label>)}
+                    </div>
                   </form>
                 </td>
               </tr>
@@ -119,6 +159,14 @@ export default async function BillingPage({ searchParams }: { searchParams: Prom
           <label style={{ flexDirection: "row", alignItems: "center", fontWeight: 400 }}><input type="checkbox" name="notify" defaultChecked /> Send it on WhatsApp</label>
           <button className="btn blue" style={{ alignSelf: "flex-start" }}>Create invoice</button>
         </form>
+        <form action={saveZdmBank} className="card stack">
+          <h2>ZDMINC bank details</h2>
+          <p className="muted" style={{ margin: 0 }}>Shown to clients on open invoices so they can pay by 1st Pay or any bank transfer, with the invoice number as the reference. {bankOn ? "On." : "Off until you add them."}</p>
+          <textarea name="bank_details" rows={5} defaultValue={bank?.value ?? ""} disabled={!manager} placeholder={"Bank: CIBC Caribbean\nAccount name: ZDMINC\nAccount number: ...\nBranch / transit: ..."} />
+          {manager && <button className="btn secondary small" style={{ alignSelf: "flex-start" }}>Save bank details</button>}
+        </form>
+      </div>
+      <div className="cols">
         <section className="card stack">
           <h2>Plan changes this month</h2>
           {(changes ?? []).map((c: any) => (

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import { notFound, redirect } from "next/navigation";
@@ -8,6 +9,8 @@ import { ensurePaymentLink, sendFromBusiness, sendReceipt } from "@/lib/payments
 import { receiptUrl } from "@/lib/receipt";
 import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary, waLink } from "@/lib/order-text";
+import { overbooked, prettyDate, withRental } from "@/lib/rental";
+import { loadBookings } from "@/lib/rental-server";
 
 const NEXT_STATUSES = ["awaiting_payment", "paid", "ready", "fulfilled", "cancelled"] as const;
 
@@ -20,7 +23,7 @@ export default async function OrderPage({ params, searchParams }: {
   const { supabase, business } = await requireMembership(slug);
   const { data: order } = await supabase
     .from("orders")
-    .select("*, customers(id, name, phone), order_items(id, name, unit_price, quantity)")
+    .select("*, customers(id, name, phone), order_items(id, product_id, name, unit_price, quantity)")
     .eq("business_id", business.id)
     .eq("code", code)
     .maybeSingle();
@@ -44,7 +47,7 @@ export default async function OrderPage({ params, searchParams }: {
     const admin = createAdminClient();
     const { data: o } = await admin
       .from("orders")
-      .select("id, code, total, currency, customer_id, customers(phone), order_items(name, unit_price, quantity)")
+      .select("*, customers(phone), order_items(name, unit_price, quantity)")
       .eq("business_id", business.id).eq("code", code).single<any>();
     if (!o?.customers?.phone) redirect(`${path}?msg=No customer phone on this order yet`);
     if (needsPrice(o.order_items ?? [])) redirect(`${path}?msg=${encodeURIComponent("Set the prices to confirm first")}`);
@@ -53,7 +56,7 @@ export default async function OrderPage({ params, searchParams }: {
     if (!url) redirect(`${path}?msg=Connect Fygaro in Settings first`);
     const res = await sendFromBusiness(
       admin, business.id, o.customers.phone,
-      `${orderSummary(o.code, o.order_items, o.total, o.currency)}\n\nPay securely here: ${url}`,
+      `${withRental(orderSummary(o.code, o.order_items, o.total, o.currency), o)}\n\nPay securely here: ${url}`,
       { customerId: o.customer_id, orderId: o.id },
     );
     redirect(`${path}?msg=${res.ok ? "Sent on WhatsApp" : encodeURIComponent("Not sent: " + res.error)}`);
@@ -107,6 +110,35 @@ export default async function OrderPage({ params, searchParams }: {
     redirect(`${path}?msg=${res.ok ? "Receipt sent on WhatsApp" : encodeURIComponent("Not sent: " + res.error)}`);
   }
 
+  async function confirmTransfer() {
+    "use server";
+    const { business, role } = await requireMembership(slug);
+    if (role === "staff") redirect(`${path}?msg=${encodeURIComponent("Only owners and admins can confirm a transfer")}`);
+    const admin = createAdminClient();
+    const { data: o } = await admin.from("orders").select("id, transfer_reference").eq("business_id", business.id).eq("code", code).single();
+    if (!o) redirect(path);
+    const { data: changed } = await admin.rpc("mark_order_paid", { p_order: o.id, p_txn: `transfer:${o.transfer_reference ?? "confirmed"}` });
+    if (changed) await sendReceipt(admin, o.id).catch(() => null);
+    redirect(`${path}?msg=${encodeURIComponent(changed ? "Transfer confirmed. Receipt sent on WhatsApp." : "This order was already paid.")}`);
+  }
+
+  async function rejectTransfer() {
+    "use server";
+    const { business, role } = await requireMembership(slug);
+    if (role === "staff") redirect(`${path}?msg=${encodeURIComponent("Only owners and admins can do this")}`);
+    const admin = createAdminClient();
+    const { data: o } = await admin.from("orders").select("id, code, total, currency, customers(phone)").eq("business_id", business.id).eq("code", code).single<any>();
+    if (!o) redirect(path);
+    await admin.from("orders").update({ status: "awaiting_payment", transfer_submitted_at: null }).eq("id", o.id).eq("status", "transfer_pending");
+    if (o.customers?.phone) {
+      const url = await ensurePaymentLink(admin, o.id);
+      await sendFromBusiness(admin, business.id, o.customers.phone,
+        `We haven't received the transfer for order ${o.code} (${money(o.total, o.currency)}) yet. If you've sent it, please reply with the transfer reference number.${url ? `\nOr pay by card here: ${url}` : ""}`,
+        { orderId: o.id }).catch(() => null);
+    }
+    redirect(`${path}?msg=${encodeURIComponent("Marked as not received. We've let the customer know.")}`);
+  }
+
   async function setStatus(formData: FormData) {
     "use server";
     const { supabase, business } = await requireMembership(slug);
@@ -141,9 +173,38 @@ export default async function OrderPage({ params, searchParams }: {
     redirect(`${path}?msg=${encodeURIComponent(res.ok ? "Ready message sent on WhatsApp" : `Not sent: ${res.error}`)}`);
   }
 
+  async function rentalStep(f: FormData) {
+    "use server";
+    const { business } = await requireMembership(slug);
+    const step = String(f.get("step"));
+    const now = new Date().toISOString();
+    const patch = step === "out" ? { picked_up_at: now } : step === "back" ? { returned_at: now, status: "fulfilled" } : step === "deposit" ? { deposit_returned_at: now } : null;
+    if (patch) await createAdminClient().from("orders").update(patch).eq("business_id", business.id).eq("code", code);
+    redirect(`${path}?msg=${encodeURIComponent(step === "out" ? "Marked picked up" : step === "back" ? "Marked returned" : "Deposit marked as refunded")}`);
+  }
+
   const customerPhone = order.customers?.phone as string | undefined;
   const toPrice = needsPrice(order.order_items) && !["paid", "fulfilled", "cancelled"].includes(order.status);
-  const summary = orderSummary(order.code, order.order_items, order.total, order.currency);
+  const isTransfer = order.payment_method === "transfer";
+  const admin = createAdminClient();
+  const proofUrl = order.transfer_proof_path
+    ? (await admin.storage.from("transfer-proofs").createSignedUrl(order.transfer_proof_path, 600)).data?.signedUrl ?? null
+    : null;
+  const { count: reused } = order.transfer_proof_hash
+    ? await admin.from("orders").select("id", { count: "exact", head: true }).eq("transfer_proof_hash", order.transfer_proof_hash).neq("id", order.id)
+    : { count: 0 };
+  const summary = withRental(orderSummary(order.code, order.order_items, order.total, order.currency), order);
+  // Rental: check nobody else holds the same units for these dates.
+  let clash: string[] = [];
+  if (order.rental_start && !["cancelled", "abandoned"].includes(order.status)) {
+    const { data: biz } = await admin.from("businesses").select("rental_buffer_days").eq("id", business.id).single();
+    const ids = order.order_items.map((i: any) => i.product_id).filter(Boolean);
+    const { data: prods } = ids.length ? await admin.from("products").select("id, name, stock, rental").in("id", ids) : { data: [] as any[] };
+    const bookings = await loadBookings(admin, business.id, order.rental_start, order.rental_end, biz?.rental_buffer_days ?? 0, order.id);
+    const mine = order.order_items.filter((i: any) => i.product_id).map((i: any) => ({ product_id: i.product_id, quantity: i.quantity, start: order.rental_start, end: order.rental_end }));
+    clash = overbooked((prods ?? []).filter((p: any) => p.rental), bookings.concat(mine), order.rental_start, order.rental_end, biz?.rental_buffer_days ?? 0)
+      .map((id) => (prods ?? []).find((p: any) => p.id === id)?.name ?? "an item");
+  }
 
   return (
     <div className="stack" style={{ maxWidth: 760 }}>
@@ -196,10 +257,61 @@ export default async function OrderPage({ params, searchParams }: {
         </form>
       )}
 
+      {order.rental_start && (
+        <div className="card stack" style={clash.length ? { borderColor: "var(--coral)", borderWidth: 2 } : undefined}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2 style={{ fontSize: 22 }}>Rental</h2>
+            <span className={`badge ${order.returned_at ? "paid" : order.picked_up_at ? "high" : ""}`}>{order.returned_at ? "Returned" : order.picked_up_at ? "Out with customer" : "Not picked up yet"}</span>
+          </div>
+          <div className="kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+            <div className="kpi"><small>Pick up</small><b>{prettyDate(order.rental_start)}{order.pickup_time ? `, ${order.pickup_time}` : ""}</b></div>
+            <div className="kpi"><small>Return</small><b>{prettyDate(order.rental_end)}</b></div>
+            <div className="kpi"><small>Deposit</small><b>{Number(order.deposit) > 0 ? `${money(order.deposit, order.currency)}${order.deposit_returned_at ? " refunded" : ""}` : "None"}</b></div>
+          </div>
+          {clash.length > 0 && <p className="error" style={{ margin: 0 }}>Double booked: {clash.join(", ")} {clash.length > 1 ? "are" : "is"} held by another order on these dates. Check the rental schedule before confirming.</p>}
+          <p className="muted" style={{ margin: 0 }}>{order.agreement_accepted_at ? `Rental agreement accepted ${new Date(order.agreement_accepted_at).toLocaleString("en-GB", { timeZone: "America/Barbados", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.` : "No rental agreement on file for this order."}</p>
+          <div className="row">
+            {!order.picked_up_at && order.paid_at && <form action={rentalStep}><input type="hidden" name="step" value="out" /><button className="btn">Picked up</button></form>}
+            {order.picked_up_at && !order.returned_at && <form action={rentalStep}><input type="hidden" name="step" value="back" /><button className="btn">Returned</button></form>}
+            {order.returned_at && Number(order.deposit) > 0 && !order.deposit_returned_at && <form action={rentalStep}><input type="hidden" name="step" value="deposit" /><button className="btn secondary">Deposit refunded</button></form>}
+            {customerPhone && !order.picked_up_at && <a className="btn secondary" target="_blank" rel="noreferrer" href={waLink(customerPhone, `Hi${order.customers?.name ? " " + order.customers.name : ""}! A reminder for order ${order.code}: pick up is ${prettyDate(order.rental_start)}${order.pickup_time ? ` at ${order.pickup_time}` : ""}. See you then!`)}>Pickup reminder</a>}
+            {customerPhone && order.picked_up_at && !order.returned_at && <a className="btn secondary" target="_blank" rel="noreferrer" href={waLink(customerPhone, `Hi${order.customers?.name ? " " + order.customers.name : ""}! A reminder for order ${order.code}: please return everything on ${prettyDate(order.rental_end)}. Thank you!`)}>Return reminder</a>}
+            <Link className="btn secondary" href={`/dashboard/${slug}/orders/rentals`}>Rental schedule</Link>
+          </div>
+        </div>
+      )}
+
+      {isTransfer && !order.paid_at && (
+        <div className="card stack" style={{ borderColor: order.status === "transfer_pending" ? "var(--blue)" : undefined, borderWidth: order.status === "transfer_pending" ? 2 : undefined }}>
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2 style={{ fontSize: 22 }}>Bank transfer</h2>
+            <span className={`badge ${order.status === "transfer_pending" ? "high" : ""}`}>{order.status === "transfer_pending" ? "Transfer to check" : "Waiting for the customer"}</span>
+          </div>
+          <div className="kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+            <div className="kpi"><small>Look for this amount</small><b>{money(order.total, order.currency)}</b></div>
+            <div className="kpi"><small>Reference</small><b>{order.transfer_reference ?? order.code}</b></div>
+            <div className="kpi"><small>Sent</small><b>{order.transfer_submitted_at ? new Date(order.transfer_submitted_at).toLocaleString("en-GB", { timeZone: "America/Barbados", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "Not yet"}</b></div>
+          </div>
+          {(reused ?? 0) > 0 && <p className="error" style={{ margin: 0 }}>Warning: this exact screenshot was already sent for {reused} other order{reused === 1 ? "" : "s"}. Check carefully.</p>}
+          {proofUrl
+            ? <a href={proofUrl} target="_blank" rel="noreferrer"><img src={proofUrl} alt={`Payment screenshot for order ${order.code}`} style={{ maxWidth: 280, maxHeight: 420, borderRadius: 12, border: "1px solid var(--line)" }} /></a>
+            : order.status === "transfer_pending" && <p className="muted" style={{ margin: 0 }}>The customer sent a reference number, no screenshot.</p>}
+          {order.status === "transfer_pending" && (
+            <>
+              <p style={{ margin: 0 }}><b>Check your bank account before confirming.</b> A screenshot can be edited; only money in your account counts.</p>
+              <div className="row">
+                <form action={confirmTransfer}><button className="btn blue">Money received: confirm and send receipt</button></form>
+                <form action={rejectTransfer}><button className="btn secondary">Not received</button></form>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="card stack">
         <h2 style={{ fontSize: 22 }}>Payment</h2>
         {order.payment_url ? (
-          <p>Fygaro link: <a href={order.payment_url} target="_blank" rel="noreferrer">open payment page</a></p>
+          <p>Card payment link: <a href={order.payment_url} target="_blank" rel="noreferrer">open payment page</a></p>
         ) : (
           <p className="muted">No payment link yet.</p>
         )}
@@ -214,6 +326,9 @@ export default async function OrderPage({ params, searchParams }: {
           )}
           {order.paid_at && (
             <a className="btn secondary" target="_blank" rel="noreferrer" href={receiptUrl(order.id)}>View receipt</a>
+          )}
+          {!order.paid_at && !["cancelled", "fulfilled"].includes(order.status) && (
+            <Link className="btn secondary" href={`${path}/qr`}>Show QR to pay by card</Link>
           )}
           {customerPhone && (
             <a className="btn secondary" target="_blank" rel="noreferrer"
