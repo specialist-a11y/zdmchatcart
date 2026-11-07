@@ -9,8 +9,8 @@ import { ensurePaymentLink, sendFromBusiness, sendReceipt } from "@/lib/payments
 import { receiptUrl } from "@/lib/receipt";
 import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary, waLink } from "@/lib/order-text";
-import { overbooked, prettyDate, withRental } from "@/lib/rental";
-import { loadBookings } from "@/lib/rental-server";
+import { expandKits, overbooked, prettyDate, withRental } from "@/lib/rental";
+import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 
 const NEXT_STATUSES = ["awaiting_payment", "paid", "ready", "fulfilled", "cancelled"] as const;
 
@@ -198,12 +198,13 @@ export default async function OrderPage({ params, searchParams }: {
   let clash: string[] = [];
   if (order.rental_start && !["cancelled", "abandoned"].includes(order.status)) {
     const { data: biz } = await admin.from("businesses").select("rental_buffer_days").eq("id", business.id).single();
-    const ids = order.order_items.map((i: any) => i.product_id).filter(Boolean);
-    const { data: prods } = ids.length ? await admin.from("products").select("id, name, stock, rental").in("id", ids) : { data: [] as any[] };
+    const { products: prods, kits } = await loadRentalCatalog(admin, business.id);
     const bookings = await loadBookings(admin, business.id, order.rental_start, order.rental_end, biz?.rental_buffer_days ?? 0, order.id);
     const mine = order.order_items.filter((i: any) => i.product_id).map((i: any) => ({ product_id: i.product_id, quantity: i.quantity, start: order.rental_start, end: order.rental_end }));
-    clash = overbooked((prods ?? []).filter((p: any) => p.rental), bookings.concat(mine), order.rental_start, order.rental_end, biz?.rental_buffer_days ?? 0)
-      .map((id) => (prods ?? []).find((p: any) => p.id === id)?.name ?? "an item");
+    // Only items this order holds (directly or inside a package) can clash because of it.
+    const held = new Set(expandKits(mine, kits).map((b) => b.product_id));
+    clash = overbooked(prods.filter((p) => held.has(p.id)), expandKits(bookings.concat(mine), kits), order.rental_start, order.rental_end, biz?.rental_buffer_days ?? 0)
+      .map((id) => prods.find((p) => p.id === id)?.name ?? "an item");
   }
 
   return (

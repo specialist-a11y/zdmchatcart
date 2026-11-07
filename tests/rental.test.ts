@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addDays, availability, overbooked, holdsUnits, pickupOptions, priceRentalCart, rentalLine, schedule, validateDates } from "../lib/rental.ts";
+import { addDays, availability, overbooked, holdsUnits, pickupOptions, priceRentalCart, rentalLine, schedule, validateDates, cleanIncludes, expandKits, kitFree, kitsFrom } from "../lib/rental.ts";
 
 const projector = { id: "p", name: "4K Projector", price: 90, stock: 2, active: true, rental: true, rental_unit: "day", deposit: 100, min_days: 1 };
 const backyard = { id: "b", name: "Backyard Movie Night", price: 210, stock: 1, active: true, rental: true, rental_unit: "night", deposit: 0, min_days: 1 };
@@ -37,10 +37,11 @@ test("rental cart: price x days, deposit line, mixed with a normal product", () 
   assert.deepEqual(r.items, [
     { product_id: "p", name: "4K Projector · 3 days", unit_price: 270, quantity: 2 },
     { product_id: "c", name: "Popcorn kernels", unit_price: 12, quantity: 1 },
-    { product_id: null, name: "Refundable deposit", unit_price: 200, quantity: 1 },
+    { product_id: null, name: "Refundable deposit", unit_price: 100, quantity: 1 },
   ]);
-  assert.equal(r.subtotal, 540 + 12 + 200);
-  assert.equal(r.deposit, 200);
+  // One deposit per booking, not per unit.
+  assert.equal(r.subtotal, 540 + 12 + 100);
+  assert.equal(r.deposit, 100);
 });
 
 test("rental cart: booked, too few, minimum days, nights", () => {
@@ -71,4 +72,53 @@ test("overbooked spots two bookings for the last unit", () => {
   const b = [{ product_id: "b", quantity: 1, start: "2026-11-14", end: "2026-11-15" }, { product_id: "b", quantity: 1, start: "2026-11-14", end: "2026-11-15" }];
   assert.deepEqual(overbooked([backyard, projector], b, "2026-11-14", "2026-11-15"), ["b"]);
   assert.deepEqual(overbooked([backyard], b.slice(1), "2026-11-14", "2026-11-15"), []);
+});
+
+test("deposit: the highest deposit in the booking, charged once", () => {
+  const screen = { id: "s", name: "Screen", price: 80, stock: 1, active: true, rental: true, rental_unit: "night", deposit: 20, min_days: 1 };
+  const pkg = { ...backyard, id: "k", deposit: 50 };
+  const r = priceRentalCart([{ productId: "k", quantity: 1 }, { productId: "s", quantity: 1 }], [pkg, screen], 1, { k: 1, s: 1 });
+  assert.ok(!("error" in r));
+  if ("error" in r) return;
+  assert.equal(r.deposit, 50);
+});
+
+const P = "11111111-1111-1111-1111-111111111111", S = "22222222-2222-2222-2222-222222222222", T = "33333333-3333-3333-3333-333333333333", K = "44444444-4444-4444-4444-444444444444";
+
+test("packages: clean the item list", () => {
+  assert.deepEqual(cleanIncludes([{ id: P, qty: 1 }, { id: P, qty: 3 }, { id: K, qty: 1 }, { id: "x", qty: 1 }, { id: S, qty: 0 }, { id: T, qty: 99 }], K), [{ id: P, qty: 1 }, { id: T, qty: 20 }]);
+  assert.deepEqual(cleanIncludes("nope"), []);
+});
+
+test("packages: one level, only this shop's rental items", () => {
+  const kits = kitsFrom([{ id: K, includes: [{ id: P, qty: 1 }, { id: S, qty: 1 }, { id: "55555555-5555-5555-5555-555555555555", qty: 1 }] }, { id: P }, { id: S, includes: [{ id: T, qty: 1 }] }, { id: T }]);
+  // S is a package itself, so it can't sit inside K; the unknown id is dropped.
+  assert.deepEqual(kits[K], [{ id: P, qty: 1 }]);
+  assert.deepEqual(kits[S], [{ id: T, qty: 1 }]);
+});
+
+test("packages: booking a package holds its items, and a booked item blocks the package", () => {
+  const kits = { [K]: [{ id: P, qty: 1 }, { id: T, qty: 2 }] };
+  const products = [{ id: K, stock: 1 }, { id: P, stock: 1 }, { id: T, stock: 2 }];
+  // Package booked: the projector and both tents are out too.
+  const pkgBooked = expandKits([{ product_id: K, quantity: 1, start: "2026-11-14", end: "2026-11-15" }], kits);
+  assert.deepEqual(kitFree(availability(products, pkgBooked, "2026-11-14", "2026-11-15"), kits), { [K]: 0, [P]: 0, [T]: 0 });
+  // One tent rented on its own: the package needs two, so it's not free; the projector still is.
+  const tentOut = expandKits([{ product_id: T, quantity: 1, start: "2026-11-14", end: "2026-11-15" }], kits);
+  assert.deepEqual(kitFree(availability(products, tentOut, "2026-11-14", "2026-11-15"), kits), { [K]: 0, [P]: 1, [T]: 1 });
+  // Next day everything is free again.
+  assert.deepEqual(kitFree(availability(products, pkgBooked, "2026-11-15", "2026-11-16"), kits), { [K]: 1, [P]: 1, [T]: 2 });
+  // Clash check sees the projector double-booked through the package.
+  const both = expandKits([{ product_id: K, quantity: 1, start: "2026-11-14", end: "2026-11-15" }, { product_id: P, quantity: 1, start: "2026-11-14", end: "2026-11-15" }], kits);
+  assert.deepEqual(overbooked(products, both, "2026-11-14", "2026-11-15"), [P]);
+});
+
+test("packages: the cart can't take the package and its item when only one is free", () => {
+  const kits = { k: [{ id: "p", qty: 1 }] };
+  const pkg = { ...backyard, id: "k" };
+  const one = { ...projector, stock: 1 };
+  const free = kitFree({ k: 1, p: 1 }, kits);
+  assert.deepEqual(priceRentalCart([{ productId: "k", quantity: 1 }, { productId: "p", quantity: 1 }], [pkg, one], 1, free, kits),
+    { error: "Not enough 4K Projector free on those dates for everything in your cart. Try other dates or remove an item." });
+  assert.ok(!("error" in priceRentalCart([{ productId: "k", quantity: 1 }], [pkg, one], 1, free, kits)));
 });

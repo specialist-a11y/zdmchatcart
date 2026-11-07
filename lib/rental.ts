@@ -70,6 +70,54 @@ export function availability(products: { id: string; stock: number | null }[], b
   return out;
 }
 
+/** Packages: package id -> the rental items it is made of (one level, no packages inside packages). */
+export type Kits = Record<string, { id: string; qty: number }[]>;
+const UUID = /^[0-9a-f-]{36}$/i;
+
+/** A package's item list as saved: valid ids, 1 to 20 of each, no repeats, not itself, at most 20 lines. */
+export function cleanIncludes(raw: unknown, selfId?: string | null): { id: string; qty: number }[] {
+  if (!Array.isArray(raw)) return [];
+  const seen = new Set<string>();
+  const out: { id: string; qty: number }[] = [];
+  for (const r of raw) {
+    const id = String((r as any)?.id ?? "");
+    const qty = Math.floor(Number((r as any)?.qty ?? 1));
+    if (!UUID.test(id) || id === selfId || seen.has(id) || !(qty >= 1)) continue;
+    seen.add(id);
+    out.push({ id, qty: Math.min(20, qty) });
+  }
+  return out.slice(0, 20);
+}
+
+export function kitsFrom(products: { id: string; includes?: unknown }[]): Kits {
+  const ids = new Set(products.map((p) => p.id));
+  const kits: Kits = {};
+  for (const p of products) {
+    // Only items that are themselves rentals of this shop, and not packages (keeps it one level deep).
+    const list = cleanIncludes(p.includes, p.id).filter((c) => ids.has(c.id));
+    if (list.length) kits[p.id] = list;
+  }
+  for (const id of Object.keys(kits)) kits[id] = kits[id].filter((c) => !kits[c.id]);
+  return kits;
+}
+
+/** A booked package also holds the items inside it. */
+export function expandKits(bookings: Booking[], kits: Kits): Booking[] {
+  const extra: Booking[] = [];
+  for (const b of bookings) for (const c of (b.product_id && kits[b.product_id]) || []) extra.push({ ...b, product_id: c.id, quantity: b.quantity * c.qty });
+  return extra.length ? bookings.concat(extra) : bookings;
+}
+
+/** A package is only free when every item inside it is free too. */
+export function kitFree(free: Record<string, number>, kits: Kits): Record<string, number> {
+  const out = { ...free };
+  for (const [id, list] of Object.entries(kits)) {
+    if (!(id in out)) continue;
+    for (const c of list) if (c.id in free) out[id] = Math.min(out[id], Math.floor(free[c.id] / c.qty));
+  }
+  return out;
+}
+
 /** Products booked beyond what the business owns on any day from start to end (used to catch two bookings at the same moment). */
 export function overbooked(products: { id: string; stock: number | null }[], bookings: Booking[], start: string, end: string, bufferDays = 0): string[] {
   return products.filter((p) => {
@@ -86,7 +134,9 @@ export function overbooked(products: { id: string; stock: number | null }[], boo
 export type PricedLine = { product_id: string | null; name: string; unit_price: number; quantity: number };
 
 /**
- * Price a cart that has rental items: each rental line costs price x days, deposits are added as their own line.
+ * Price a cart that has rental items: each rental line costs price x days.
+ * The deposit is one per booking: the highest deposit of the rental items in the cart, added as its own line.
+ * Packages (kits) also need every item inside them free, counting the same items booked on their own in this cart.
  * Ordinary products in the same cart are priced as usual (stock limits still apply to them).
  */
 export function priceRentalCart(
@@ -94,6 +144,7 @@ export function priceRentalCart(
   catalog: RentalProduct[],
   days: number,
   free: Record<string, number>,
+  kits: Kits = {},
 ): { items: PricedLine[]; subtotal: number; deposit: number; unit: RentalUnit } | { error: string } {
   const byId = new Map(catalog.map((p) => [p.id, p]));
   const merged = new Map<string, number>();
@@ -112,7 +163,7 @@ export function priceRentalCart(
       const left = free[id] ?? 0;
       if (qty > left) return { error: left === 0 ? `${p.name} is already booked on those dates. Try other dates.` : `Only ${left} ${p.name} free on those dates.` };
       cents += priceCents * days * qty;
-      depositCents += Math.round(Number(p.deposit ?? 0) * 100) * qty;
+      depositCents = Math.max(depositCents, Math.round(Number(p.deposit ?? 0) * 100));
       items.push({ product_id: p.id, name: `${p.name} · ${days} ${unitLabel(p.rental_unit, days)}`, unit_price: (priceCents * days) / 100, quantity: qty });
     } else {
       if (p.stock !== null && qty > p.stock) return { error: `Only ${p.stock} left of ${p.name}.` };
@@ -121,6 +172,19 @@ export function priceRentalCart(
     }
   }
   if (!items.length) return { error: "Your cart is empty." };
+  // The same item wanted on its own and inside a package (or in two packages): all of it must be free.
+  const want = new Map<string, number>();
+  for (const [id, qty] of merged) {
+    if (!byId.get(id)?.rental) continue;
+    want.set(id, (want.get(id) ?? 0) + qty);
+    for (const c of kits[id] ?? []) want.set(c.id, (want.get(c.id) ?? 0) + qty * c.qty);
+  }
+  for (const [id, n] of want) {
+    if (id in free && n > free[id]) {
+      const name = byId.get(id)?.name;
+      return { error: name ? `Not enough ${name} free on those dates for everything in your cart. Try other dates or remove an item.` : "Some of the equipment in your cart is already booked on those dates. Try other dates or remove an item." };
+    }
+  }
   if (depositCents > 0) items.push({ product_id: null, name: "Refundable deposit", unit_price: depositCents / 100, quantity: 1 });
   return { items, subtotal: (cents + depositCents) / 100, deposit: depositCents / 100, unit };
 }

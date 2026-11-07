@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient, hasServiceRoleKey } from "@/lib/supabase/admin";
 import { cleanVariants } from "@/lib/catalog";
+import { cleanIncludes } from "@/lib/rental";
 
 const page = (slug: string) => `/dashboard/${slug}/products`;
 const safeName = (n: string) => n.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "photo.jpg";
@@ -37,6 +38,8 @@ export type ProductInput = {
   rental_unit?: string;
   deposit?: string;
   min_days?: string;
+  // Packages (migration 0025)
+  includes?: { id: string; qty: string }[];
 };
 const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
@@ -96,7 +99,16 @@ export async function saveProduct(slug: string, input: ProductInput) {
   const client = db(supabase);
   const saveRental = async (id: string) => {
     const { error } = await client.from("products").update(rental).eq("id", id).eq("business_id", business.id);
-    return error && isRental ? "Saved, but rental settings need migration 0021_rentals.sql." : null;
+    if (error) return isRental ? "Saved, but rental settings need migration 0021_rentals.sql." : null;
+    // What's inside a package: only this shop's other rental items.
+    let includes = isRental ? cleanIncludes((input.includes ?? []).map((c) => ({ id: c.id, qty: Number(c.qty) })), id) : [];
+    if (includes.length) {
+      const { data: ok } = await client.from("products").select("id").eq("business_id", business.id).eq("rental", true).in("id", includes.map((c) => c.id));
+      const mine = new Set((ok ?? []).map((r: any) => r.id));
+      includes = includes.filter((c) => mine.has(c.id));
+    }
+    const { error: incErr } = await client.from("products").update({ includes }).eq("id", id).eq("business_id", business.id);
+    return incErr && includes.length ? "Saved, but packages need migration 0025_rental_packages.sql." : null;
   };
   // Save the extras separately so items still save before migration 0016 has run.
   const saveExtras = async (id: string) => {

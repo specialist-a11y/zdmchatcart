@@ -13,6 +13,7 @@ export type Item = {
   price: number; price_note: string | null; stock: number | null; image_url: string | null; active: boolean; variants: unknown; featured?: boolean;
   images?: string[]; ready_days?: string[]; lead_days?: number; pairs_with?: string | null; badge?: string | null; slug?: string | null;
   rental?: boolean; rental_unit?: string | null; deposit?: number | null; min_days?: number | null;
+  includes?: { id: string; qty: number }[];
 };
 const WEEK = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]] as const;
 
@@ -67,7 +68,7 @@ const CSS = `
 const blank = (kind: "product" | "service"): ProductInput => ({
   kind, name: "", description: "", category: "", price: "", price_note: kind === "service" ? "" : "", stock: "", image_url: "", active: true, hasOptions: false,
   variants: [{ name: "", price: "", available: true }], images: [], ready_days: [], lead_days: "", pairs_with: "", badge: "",
-  rental: false, rental_unit: "day", deposit: "", min_days: "1",
+  rental: false, rental_unit: "day", deposit: "", min_days: "1", includes: [],
 });
 
 function toInput(p: Item): ProductInput {
@@ -79,6 +80,7 @@ function toInput(p: Item): ProductInput {
     variants: vs.length ? vs.map((v) => ({ id: v.id, name: v.name, price: String(v.price), available: v.available })) : [{ name: "", price: "", available: true }],
     images: p.images ?? [], ready_days: p.ready_days ?? [], lead_days: p.lead_days ? String(p.lead_days) : "", pairs_with: p.pairs_with ?? "", badge: p.badge ?? "",
     rental: !!p.rental, rental_unit: p.rental_unit === "night" ? "night" : "day", deposit: p.deposit ? String(p.deposit) : "", min_days: String(p.min_days ?? 1),
+    includes: (p.includes ?? []).map((c) => ({ id: c.id, qty: String(c.qty) })),
   };
 }
 
@@ -365,11 +367,37 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                       <label>Charged per
                         <select value={form.rental_unit ?? "day"} onChange={(e) => set({ rental_unit: e.target.value })}><option value="day">Day</option><option value="night">Night</option></select>
                       </label>
-                      <label>Refundable deposit ({currency})<input type="number" min="0" step="0.01" inputMode="decimal" value={form.deposit ?? ""} onChange={(e) => set({ deposit: e.target.value })} placeholder="0" /></label>
+                      <label>Refundable deposit per booking ({currency})<input type="number" min="0" step="0.01" inputMode="decimal" value={form.deposit ?? ""} onChange={(e) => set({ deposit: e.target.value })} placeholder="0" /></label>
                       <label>Minimum {form.rental_unit === "night" ? "nights" : "days"}<input type="number" min="1" max="30" inputMode="numeric" value={form.min_days ?? "1"} onChange={(e) => set({ min_days: e.target.value })} /></label>
                     </div>
                   )}
-                  <span className="muted" style={{ fontSize: 13 }}>For rentals, Stock is how many you own (1 if blank). It doesn&apos;t go down when rented: each booking holds units for its dates. The price is per {form.rental_unit === "night" ? "night" : "day"}.</span>
+                  {form.rental && (() => {
+                    // Packages: the rental items inside it. Items that are packages themselves can't go inside another.
+                    const parts = items.filter((i) => i.rental && i.active && i.id !== form.id && !(i.includes?.length));
+                    if (!parts.length) return null;
+                    const inc = form.includes ?? [];
+                    const toggle = (id: string, on: boolean) => set({ includes: on ? [...inc, { id, qty: "1" }] : inc.filter((c) => c.id !== id) });
+                    return (
+                      <fieldset className="stack" style={{ gap: 6, border: "1px solid var(--line)", borderRadius: 10, padding: 12 }}>
+                        <legend style={{ fontWeight: 700, padding: "0 4px" }}>Is this a package? Tick what&apos;s inside</legend>
+                        {parts.map((i) => {
+                          const c = inc.find((x) => x.id === i.id);
+                          return (
+                            <div key={i.id} className="row" style={{ gap: 8, minHeight: 44, flexWrap: "nowrap" }}>
+                              <label className="pe-switch" style={{ flex: 1, minWidth: 0 }}>
+                                <input type="checkbox" checked={!!c} onChange={(e) => toggle(i.id, e.target.checked)} />
+                                <span style={{ overflowWrap: "anywhere" }}>{i.name}</span>
+                              </label>
+                              {c && <input aria-label={`How many ${i.name}`} type="number" min="1" max="20" inputMode="numeric" style={{ width: 72 }} value={c.qty}
+                                onChange={(e) => set({ includes: inc.map((x) => (x.id === i.id ? { ...x, qty: e.target.value } : x)) })} />}
+                            </div>
+                          );
+                        })}
+                        <span className="muted" style={{ fontSize: 13 }}>Booking the package holds these items for the same dates, so nobody can rent them separately. If one is already booked, the package shows as booked too.</span>
+                      </fieldset>
+                    );
+                  })()}
+                  <span className="muted" style={{ fontSize: 13 }}>For rentals, Stock is how many you own (1 if blank). It doesn&apos;t go down when rented: each booking holds units for its dates. The price is per {form.rental_unit === "night" ? "night" : "day"}. One deposit per booking: when several items are booked together, the highest deposit is charged once.</span>
                 </div>
               </details>
             )}

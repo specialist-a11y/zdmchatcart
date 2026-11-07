@@ -3,8 +3,8 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceCart, waLink } from "@/lib/order-text";
-import { addDays, availability, overbooked, pickupOptions, priceRentalCart, validateDates, type PricedLine, type RentalProduct } from "@/lib/rental";
-import { loadBookings } from "@/lib/rental-server";
+import { addDays, availability, expandKits, kitFree, overbooked, pickupOptions, priceRentalCart, validateDates, type Kits, type PricedLine, type RentalProduct } from "@/lib/rental";
+import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 import { todayIn } from "@/lib/billing";
 import { upsertCustomer } from "@/lib/customers";
 import { template } from "@/lib/catalog";
@@ -65,6 +65,8 @@ export async function POST(req: Request) {
   const buffer = business.rental_buffer_days ?? 0;
   let rentalLines: PricedLine[] = [];
   let rentalTotal = 0;
+  // All the shop's rental items, so packages can check the items inside them.
+  let rentalCatalog: { products: { id: string; stock: number | null }[]; kits: Kits } = { products: rentals, kits: {} };
   if (rentals.length) {
     if (!body.rental) return NextResponse.json({ error: "Pick your rental dates first." }, { status: 400 });
     const bad = validateDates(body.rental.start, body.rental.days, todayIn(), business.rental_lead_days ?? 0);
@@ -73,9 +75,11 @@ export async function POST(req: Request) {
     const times = pickupOptions(business.rental_pickup_times);
     if (times.length && !times.includes(body.rental.pickupTime ?? "")) return NextResponse.json({ error: "Pick a pickup time." }, { status: 400 });
     const end = addDays(body.rental.start, body.rental.days);
-    const bookings = await loadBookings(admin, business.id, body.rental.start, end, buffer);
-    const free = availability(rentals, bookings, body.rental.start, end, buffer);
-    const r = priceRentalCart(body.items.filter((i) => rentalIds.has(i.productId)), rentals, body.rental.days, free);
+    rentalCatalog = await loadRentalCatalog(admin, business.id);
+    const { kits } = rentalCatalog;
+    const bookings = expandKits(await loadBookings(admin, business.id, body.rental.start, end, buffer), kits);
+    const free = kitFree(availability(rentalCatalog.products, bookings, body.rental.start, end, buffer), kits);
+    const r = priceRentalCart(body.items.filter((i) => rentalIds.has(i.productId)), rentals, body.rental.days, free, kits);
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 });
     rentalLines = r.items;
     rentalTotal = r.subtotal;
@@ -162,7 +166,7 @@ export async function POST(req: Request) {
   // Two shoppers may have taken the last unit at the same moment: check again now both are saved, and give way if so.
   if (rental) {
     const after = await loadBookings(admin, business.id, rental.start, rental.end, buffer, undefined, { id: order.id, created_at: order.created_at });
-    const clash = overbooked(rentals, after, rental.start, rental.end, buffer);
+    const clash = overbooked(rentalCatalog.products, expandKits(after, rentalCatalog.kits), rental.start, rental.end, buffer);
     if (clash.length) {
       await admin.from("orders").update({ status: "cancelled", note: "Cancelled automatically: those dates were booked at the same moment." }).eq("id", order.id);
       return NextResponse.json({ error: "Sorry, someone just booked those dates. Please pick other dates." }, { status: 409 });

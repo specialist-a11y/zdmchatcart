@@ -17,6 +17,7 @@ export default async function ProductsPage({ params, searchParams }: { params: P
     price: Number(p.price), price_note: p.price_note ?? null, stock: p.stock, image_url: p.image_url, active: p.active, variants: p.variants ?? [], featured: !!p.featured,
     images: p.images ?? [], ready_days: p.ready_days ?? [], lead_days: p.lead_days ?? 0, pairs_with: p.pairs_with ?? null, badge: p.badge ?? null, slug: p.slug ?? null,
     rental: !!p.rental, rental_unit: p.rental_unit ?? "day", deposit: p.deposit == null ? null : Number(p.deposit), min_days: p.min_days ?? 1,
+    includes: Array.isArray(p.includes) ? p.includes : [],
   }));
 
   return (

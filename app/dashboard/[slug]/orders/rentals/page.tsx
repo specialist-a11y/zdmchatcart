@@ -5,7 +5,7 @@ import { num } from "@/lib/crm-nav";
 import { requireMembership } from "@/lib/business";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { todayIn } from "@/lib/billing";
-import { addDays, availability, holdsUnits, prettyDate, schedule } from "@/lib/rental";
+import { addDays, availability, expandKits, holdsUnits, kitFree, kitsFrom, prettyDate, schedule } from "@/lib/rental";
 
 const DAYS = 21;
 const GRID = 14;
@@ -24,7 +24,8 @@ export default async function RentalSchedule({ params, searchParams }: { params:
 
   const [{ data: biz }, { data: products }, { data: orders }, { data: out }] = await Promise.all([
     admin.from("businesses").select("rental_buffer_days").eq("id", business.id).single(),
-    admin.from("products").select("id, name, stock").eq("business_id", business.id).eq("rental", true).order("sort_order"),
+    admin.from("products").select("id, name, stock, includes").eq("business_id", business.id).eq("rental", true).order("sort_order")
+      .then(async (r) => (r.error ? await admin.from("products").select("id, name, stock").eq("business_id", business.id).eq("rental", true).order("sort_order") : r)),
     admin.from("orders")
       .select("id, code, status, created_at, paid_at, rental_start, rental_end, pickup_time, picked_up_at, returned_at, customers(name, phone), order_items(product_id, name, quantity)")
       .eq("business_id", business.id).not("rental_start", "is", null)
@@ -37,8 +38,11 @@ export default async function RentalSchedule({ params, searchParams }: { params:
   const holding = (orders ?? []).filter((o: any) => holdsUnits(o.status, o.created_at));
   const days = schedule(holding as any[], from, DAYS);
   const buffer = biz?.rental_buffer_days ?? 0;
-  const bookings = holding.flatMap((o: any) => (o.order_items ?? []).filter((i: any) => i.product_id).map((i: any) => ({ product_id: i.product_id, quantity: i.quantity, start: o.rental_start, end: o.rental_end })));
+  const kits = kitsFrom((products ?? []) as any[]);
+  const bookings = expandKits(holding.flatMap((o: any) => (o.order_items ?? []).filter((i: any) => i.product_id).map((i: any) => ({ product_id: i.product_id, quantity: i.quantity, start: o.rental_start, end: o.rental_end }))), kits);
   const grid = Array.from({ length: GRID }, (_, i) => addDays(from, i));
+  // Free units per day; a package is only free when everything inside it is.
+  const freeOn = new Map(grid.map((d) => [d, kitFree(availability(products ?? [], bookings, d, addDays(d, 1), buffer), kits)]));
 
   const who = (o: any) => o.customers?.name || (o.customers?.phone ? `+${o.customers.phone}` : "Customer");
   const items = (o: any) => (o.order_items ?? []).filter((i: any) => i.product_id).map((i: any) => `${i.quantity} x ${i.name}`).join(", ");
@@ -79,7 +83,7 @@ export default async function RentalSchedule({ params, searchParams }: { params:
                   <tr key={p.id}>
                     <td><strong>{p.name}</strong><br /><span className="muted" style={{ fontSize: 12 }}>{p.stock ?? 1} owned</span></td>
                     {grid.map((d) => {
-                      const f = availability([p], bookings, d, addDays(d, 1), buffer)[p.id];
+                      const f = freeOn.get(d)?.[p.id] ?? 0;
                       const owned = p.stock ?? 1;
                       return <td key={d} className={f === 0 ? "full" : f < owned ? "part" : "free"} title={`${f} of ${owned} free`}>{f}</td>;
                     })}
