@@ -90,6 +90,8 @@ async function createOrder(req: Request) {
     const settings = await rentalSettings(admin, business.id);
     const eve = settings.eve;
     depositKind = settings.depositMode;
+    // Evening-before pickup is one event night: pick up the day before, return the following day.
+    if (eve) body.rental.days = 1;
     const bad = validateDates(body.rental.start, body.rental.days, todayIn(), (business.rental_lead_days ?? 0) + (eve ? 1 : 0));
     if (bad) return NextResponse.json({ error: bad }, { status: 400 });
     if (business.rental_agreement_url && !body.rental.agreed) return NextResponse.json({ error: "Please accept the rental agreement." }, { status: 400 });

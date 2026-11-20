@@ -12,12 +12,13 @@ export async function GET(req: Request) {
   const u = new URL(req.url);
   const slug = u.searchParams.get("slug") ?? "";
   const start = u.searchParams.get("start") ?? "";
-  const days = Number(u.searchParams.get("days") ?? "1");
+  let days = Number(u.searchParams.get("days") ?? "1");
   const admin = createAdminClient();
   const { data: b } = await admin.from("businesses").select("id, rental_lead_days, rental_buffer_days").eq("slug", slug).maybeSingle();
   if (!b) return NextResponse.json({ error: "Shop not found" }, { status: 404, headers: CORS });
   // Evening-before pickup: start is the event date; the items go out the day before.
   const eve = await evePickupOn(admin, b.id);
+  if (eve) days = 1; // one event night: pick up the day before, return the following day
   const bad = validateDates(start, days, todayIn(), (b.rental_lead_days ?? 0) + (eve ? 1 : 0));
   if (bad) return NextResponse.json({ error: bad }, { status: 400, headers: CORS });
   const { pickup, end } = rentalSpan(start, days, eve);

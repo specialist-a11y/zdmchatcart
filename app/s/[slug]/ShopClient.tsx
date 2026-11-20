@@ -97,7 +97,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   const earliest = addDays(today ?? new Date().toISOString().slice(0, 10), Math.max(0, business.rental_lead_days ?? 0) + (eve ? 1 : 0));
   const unit = products.find((p) => p.rental)?.rental_unit ?? "day";
   const [start, setStart] = useState(earliest);
-  const [days, setDays] = useState(() => Math.max(1, products.find((p) => p.rental)?.min_days ?? 1));
+  const [days, setDays] = useState(() => business.rental_eve_pickup ? 1 : Math.max(1, products.find((p) => p.rental)?.min_days ?? 1));
   const [free, setFree] = useState<Record<string, number> | null>(null);
   const [dateError, setDateError] = useState("");
   const times = pickupOptions(business.rental_pickup_times);
@@ -471,10 +471,11 @@ export default function ShopClient({ business, products, attribution, previewTem
           <section className="s-rentbar" aria-label="Rental dates">
             <strong>When do you need it?</strong>
             <label>{eve ? "Event date" : "Pick up"}<input type="date" value={start} min={earliest} max={addDays(earliest, 365)} onChange={(e) => e.target.value && setStart(e.target.value)} /></label>
-            <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            {/* Evening-before pickup is one event night: pick up the day before, return the following day. */}
+            {!eve && <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
               {Array.from({ length: MAX_DAYS }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n} {unitLabel(unit, n)}</option>)}
-            </select></label>
-            <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : <>{eve ? `Pick up ${prettyDate(addDays(start, -1))} evening, return ` : "Return "}{prettyDate(addDays(start, days))}{free ? "" : " · checking..."}</>}</span>
+            </select></label>}
+            <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : <>{eve ? `Pick up ${prettyDate(addDays(start, -1))}, the day before. Return ` : "Return "}{prettyDate(addDays(start, days))}{eve ? ", the following day" : ""}{free ? "" : " · checking..."}</>}</span>
           </section>
         )}
         {named.length > 1 && (
@@ -670,11 +671,13 @@ export default function ShopClient({ business, products, attribution, previewTem
                   <span className="s-small">Rental dates</span>
                   <div className="s-rentpick">
                     <label>{eve ? "Event date" : "Pick up"}<input type="date" value={start} min={earliest} max={addDays(earliest, 365)} onChange={(e) => e.target.value && setStart(e.target.value)} /></label>
-                    <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+                    {!eve && <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
                       {Array.from({ length: MAX_DAYS }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n} {unitLabel(unit, n)}</option>)}
-                    </select></label>
+                    </select></label>}
                   </div>
-                  <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : <>{eve ? `Pick up ${prettyDate(addDays(start, -1))} (the evening before, free), return ` : "Return "}{prettyDate(addDays(start, days))} ({days} {unitLabel(unit, days)}){free ? "" : " · checking..."}</>}</span>
+                  <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : eve
+                    ? <>Pick up {prettyDate(addDays(start, -1))}, the day before your event, so you have time to set up comfortably. Return {prettyDate(addDays(start, days))}, the following day.{free ? "" : " · checking..."}</>
+                    : <>Return {prettyDate(addDays(start, days))} ({days} {unitLabel(unit, days)}){free ? "" : " · checking..."}</>}</span>
                   {times.length > 0 && (
                     <label>Pickup time<select value={pickupTime} onChange={(e) => setPickupTime(e.target.value)}>
                       <option value="">Choose a time</option>{times.map((x) => <option key={x} value={x}>{x}</option>)}
