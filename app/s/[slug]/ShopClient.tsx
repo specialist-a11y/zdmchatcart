@@ -213,7 +213,8 @@ export default function ShopClient({ business, products, attribution, previewTem
   const lines = Object.entries(cart).flatMap(([key, q]) => { const l = q > 0 ? line(key) : null; return l ? [{ key, q, ...l }] : []; });
   const count = lines.reduce((s, l) => s + l.q, 0);
   const cartHasRental = lines.some((l) => l.p.rental);
-  const deposit = lines.reduce((s, l) => s + (l.p.rental ? Number(l.p.deposit ?? 0) * l.q : 0), 0);
+  // One deposit per booking: the highest deposit of the rental items in the cart (the server works it out the same way).
+  const deposit = lines.reduce((s, l) => Math.max(s, l.p.rental ? Number(l.p.deposit ?? 0) : 0), 0);
   const total = lines.reduce((s, l) => s + l.price * l.q, 0) + deposit;
   const rentalReady = !cartHasRental || (!!free && !dateError && (!times.length || !!pickupTime) && (!business.rental_agreement_url || agreed));
   // Dates changed: keep rental items within what's free.
@@ -647,7 +648,14 @@ export default function ShopClient({ business, products, attribution, previewTem
 
               {cartHasRental && (
                 <div className="stack" style={{ gap: 8 }}>
-                  <span><b>Rental:</b> pick up {prettyDate(start)}, return {prettyDate(addDays(start, days))} ({days} {unitLabel(unit, days)})</span>
+                  <span className="s-small">Rental dates</span>
+                  <div className="s-rentpick">
+                    <label>Pick up<input type="date" value={start} min={earliest} max={addDays(earliest, 365)} onChange={(e) => e.target.value && setStart(e.target.value)} /></label>
+                    <label>How long<select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+                      {Array.from({ length: MAX_DAYS }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n} {unitLabel(unit, n)}</option>)}
+                    </select></label>
+                  </div>
+                  <span aria-live="polite">{dateError ? <b className="s-err">{dateError}</b> : <>Return {prettyDate(addDays(start, days))} ({days} {unitLabel(unit, days)}){free ? "" : " · checking..."}</>}</span>
                   {times.length > 0 && (
                     <label>Pickup time<select value={pickupTime} onChange={(e) => setPickupTime(e.target.value)}>
                       <option value="">Choose a time</option>{times.map((x) => <option key={x} value={x}>{x}</option>)}

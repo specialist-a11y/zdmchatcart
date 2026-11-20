@@ -93,6 +93,9 @@ export const FRONT_CSS = `
 .s-rentbar label { flex: 1 1 140px; display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; }
 .s-rentbar input, .s-rentbar select { font-size: 16px; min-height: 46px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--fg); width: 100%; }
 .s-rentbar > span { flex: 1 1 180px; padding-bottom: 12px; font-size: 14px; color: var(--muted); }
+.s-rentpick { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.s-rentpick label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; min-width: 0; }
+.s-rentpick input, .s-rentpick select { font-size: 16px; min-height: 46px; padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--line); background: var(--card); color: var(--fg); width: 100%; min-width: 0; }
 .s-rentnote { display: block; font-size: 12.5px; color: var(--muted); margin-top: 4px; }
 
 /* Phones: two columns of products */

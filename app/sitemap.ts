@@ -42,7 +42,11 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
   const list = (shops ?? []).filter((s) => !withDomain.has(s.slug) && (!live || live.has(s.id)));
   const prods = await products(list.map((s) => s.id));
-  const out: MetadataRoute.Sitemap = site() ? [{ url: site(), changeFrequency: "weekly", priority: 1 }] : [];
+  const out: MetadataRoute.Sitemap = site() ? [
+    { url: site(), changeFrequency: "weekly", priority: 1 },
+    { url: `${site()}/privacy`, changeFrequency: "yearly", priority: 0.2 },
+    { url: `${site()}/data-deletion`, changeFrequency: "yearly", priority: 0.2 },
+  ] : [];
   for (const s of list) {
     const mine = prods.filter((p) => p.business_id === s.id);
     if (!mine.length) continue; // empty shops aren't worth listing
