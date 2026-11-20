@@ -137,3 +137,20 @@ export async function downloadWhatsAppMedia(mediaId: string, accessToken: string
   if (!file.ok) return null;
   return { bytes: new Uint8Array(await file.arrayBuffer()), mime: info.mime_type ?? "image/jpeg" };
 }
+
+/**
+ * Tell Meta to send this WhatsApp business account's messages to our app's webhook.
+ * Without it, messages to the number never reach ChatCart (Meta's webhook test still works, which hides the problem).
+ */
+export async function subscribeApp(wabaId: string, accessToken: string): Promise<{ ok: boolean; error?: string }> {
+  const version = process.env.WHATSAPP_GRAPH_VERSION || "v22.0";
+  try {
+    const res = await fetch(`https://graph.facebook.com/${version}/${wabaId}/subscribed_apps`, {
+      method: "POST", headers: { Authorization: `Bearer ${accessToken}` }, cache: "no-store",
+    });
+    const json = await res.json().catch(() => ({}));
+    return res.ok && json?.success ? { ok: true } : { ok: false, error: json?.error?.message ?? `Meta error ${res.status}` };
+  } catch (e: any) {
+    return { ok: false, error: e?.message ?? "network error" };
+  }
+}

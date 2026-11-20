@@ -10,6 +10,7 @@ import { connectionHealth } from "@/lib/nightly";
 import type { TokenState } from "@/lib/health";
 import { changeRole, inviteMember, removeMember } from "./team-actions";
 import { cleanHours, hasHours } from "@/lib/hours";
+import { subscribeApp } from "@/lib/whatsapp";
 
 async function requireAdmin(slug: string) {
   const ctx = await requireMembership(slug);
@@ -107,6 +108,14 @@ export default async function SettingsPage({ params, searchParams }: {
     });
     if (token) {
       await admin.from("integration_secrets").upsert({ business_id: business.id, provider: "whatsapp", secret: token, updated_at: new Date().toISOString() });
+    }
+    // Meta only sends a business account's messages to apps subscribed to it.
+    if (wabaId) {
+      const saved = token || (await admin.from("integration_secrets").select("secret").eq("business_id", business.id).eq("provider", "whatsapp").maybeSingle()).data?.secret;
+      if (saved) {
+        const sub = await subscribeApp(wabaId, saved);
+        if (!sub.ok) redirect(`${path}?msg=${encodeURIComponent(`WhatsApp saved, but Meta would not link the business account: ${sub.error}`)}`);
+      }
     }
     redirect(`${path}?msg=WhatsApp saved`);
   }
