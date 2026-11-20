@@ -223,9 +223,11 @@ export default async function SettingsPage({ params, searchParams }: {
           A second way to pay, next to card links. Customers get your details on WhatsApp with their order code as the reference, then send a screenshot or reference number.
           The order shows as <b>Transfer to check</b> until you confirm the money is in your account. Card payments still confirm on their own.
         </p>
+        {msg && /bank/i.test(msg) && <p className={/^Add your/.test(msg) ? "error" : "ok"} style={{ margin: 0 }}>{msg}</p>}
         <label>Bank details customers will see
+          <span className="muted" style={{ fontWeight: 400, fontSize: 14 }}>Type your own details. The grey text is only an example and is not saved.</span>
           <textarea name="bank_details" rows={4} maxLength={600} defaultValue={bank?.bank_details ?? ""} disabled={!isAdmin}
-            placeholder={"CIBC Caribbean, Holetown branch\nAccount name: Island Crumb Bakery Ltd\nAccount number: 1002345678\n1st Pay: use the account number above"} />
+            placeholder={"Example:\nCIBC Caribbean, Holetown branch\nAccount name: Island Crumb Bakery Ltd\nAccount number: 1002345678\n1st Pay: use the account number above"} />
         </label>
         <label className="row" style={{ gap: 8, fontWeight: 500 }}>
           <input type="checkbox" name="bank_transfer_enabled" defaultChecked={!!bank?.bank_transfer_enabled} disabled={!isAdmin} style={{ width: "auto" }} />
