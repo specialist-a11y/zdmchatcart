@@ -44,6 +44,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const prods = await products(list.map((s) => s.id));
   const out: MetadataRoute.Sitemap = site() ? [
     { url: site(), changeFrequency: "weekly", priority: 1 },
+    { url: `${site()}/terms`, changeFrequency: "yearly", priority: 0.2 },
     { url: `${site()}/privacy`, changeFrequency: "yearly", priority: 0.2 },
     { url: `${site()}/data-deletion`, changeFrequency: "yearly", priority: 0.2 },
   ] : [];
