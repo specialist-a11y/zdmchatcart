@@ -36,7 +36,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // A client's own domain (islandcrumb.com) shows their shop page.
-  if (host && !isAppHost(host) && !path.startsWith("/api/") && !path.startsWith("/l/")) {
+  if (host && !isAppHost(host) && !path.startsWith("/api/") && !path.startsWith("/l/") && !path.startsWith("/o/")) {
     const slug = await shopForDomain(host.replace(/:\d+$/, ""));
     if (slug) {
       const url = request.nextUrl.clone();

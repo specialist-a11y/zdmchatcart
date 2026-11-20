@@ -9,6 +9,8 @@ import { todayIn } from "@/lib/billing";
 import { upsertCustomer } from "@/lib/customers";
 import { shopperPhone } from "@/lib/shopper-phone";
 import { ensurePaymentLink } from "@/lib/payments";
+import { orderPath, shopperEmail } from "@/lib/order-link";
+import { notifyClient } from "@/lib/zdm-billing";
 import { template } from "@/lib/catalog";
 import { cleanHours } from "@/lib/hours";
 import { readZones, sharedReadyDays, slotOptions } from "@/lib/shop-front";
@@ -29,6 +31,9 @@ const Body = z.object({
   paymentMethod: z.enum(["card", "transfer"]).optional(),
   /** Pay by card straight away on Fygaro instead of going to WhatsApp first. */
   payNow: z.boolean().optional(),
+  /** Shopper doesn't use WhatsApp: we call or email them, and they follow the order on its own page. */
+  noWhatsapp: z.boolean().optional(),
+  email: z.string().trim().max(120).optional(),
   rental: z.object({
     start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     days: z.number().int().min(1).max(30),
@@ -122,8 +127,15 @@ export async function POST(req: Request) {
   const phone = shopperPhone(body.phone);
   if (body.phone?.trim() && !phone) return NextResponse.json({ error: "Check your WhatsApp number. Include the area code, like 246 555 1234." }, { status: 400 });
   if (!phone && body.payNow) return NextResponse.json({ error: "Add your WhatsApp number so we can send your receipt." }, { status: 400 });
+  const email = shopperEmail(body.email);
+  if (body.noWhatsapp) {
+    if (!phone) return NextResponse.json({ error: "Add a phone number we can call, with the area code, like 246 555 1234." }, { status: 400 });
+    if (!email) return NextResponse.json({ error: "Add your email address so we can send your order details." }, { status: 400 });
+  }
   if (phone) {
-    customerId = await upsertCustomer(admin, business.id, phone, { name: body.name, optIn: body.optIn, marketing: body.marketing });
+    // No WhatsApp: no WhatsApp reminders or specials for this number.
+    customerId = await upsertCustomer(admin, business.id, phone, body.noWhatsapp ? { name: body.name, optIn: false, marketing: false } : { name: body.name, optIn: body.optIn, marketing: body.marketing });
+    if (customerId && email) await admin.from("customers").update({ email }).eq("id", customerId).is("email", null);
     if (customerId) await admin.from("customers").update({ stage: "ordered" }).eq("id", customerId).eq("stage", "new");
   }
 
@@ -149,6 +161,7 @@ export async function POST(req: Request) {
       ...row,
       // Bank transfer only if the shop has it switched on with bank details saved.
       payment_method: transfer ? "transfer" : "card",
+      ...(body.noWhatsapp ? { no_whatsapp: true, contact_email: email } : {}),
       ...(rental ? {
         rental_start: rental.start, rental_end: rental.end, rental_days: rental.days, rental_unit: rental.unit,
         pickup_time: rental.pickupTime, agreement_accepted_at: rental.agreedAt, deposit: rental.deposit,
@@ -157,6 +170,7 @@ export async function POST(req: Request) {
     .select("id, created_at")
     .single();
   // Before 0018 and 0021: no payment method or rental columns yet. (Rentals can't be set up before 0021.)
+  if (error && body.noWhatsapp) return NextResponse.json({ error: "Ordering without WhatsApp isn't ready yet. Please order on WhatsApp or call the shop." }, { status: 503 });
   if (error && !rental && !transfer) ({ data: order, error } = await admin.from("orders").insert(row).select("id, created_at").single());
   if (error || !order) return NextResponse.json({ error: "Could not create the order." }, { status: 500 });
 
@@ -177,6 +191,14 @@ export async function POST(req: Request) {
       await admin.from("orders").update({ status: "cancelled", note: "Cancelled automatically: those dates were booked at the same moment." }).eq("id", order.id);
       return NextResponse.json({ error: "Sorry, someone just booked those dates. Please pick other dates." }, { status: 409 });
     }
+  }
+
+  // No WhatsApp: the shopper goes to their own order page (pay by card there, or 1st Pay / bank with a screenshot upload).
+  // The owner hears about it on WhatsApp from ZDMINC, so they know to call.
+  if (body.noWhatsapp) {
+    const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
+    await notifyClient(admin, business.id, `New order ${code} from ${body.name?.trim() || "a customer"} who doesn't use WhatsApp. Call +${phone} or email ${email}. ${site}/dashboard/${body.slug}/orders/${code}`).catch(() => null);
+    return NextResponse.json({ code, orderUrl: orderPath(order.id) });
   }
 
   // Pay now: straight to the Fygaro card page. Falls back to WhatsApp if there's no link (price to confirm, or Fygaro not set up).

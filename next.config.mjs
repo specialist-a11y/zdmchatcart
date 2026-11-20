@@ -15,7 +15,7 @@ const nextConfig = {
   // Keep private and sign-in pages out of search results (robots.txt asks too; this makes it certain).
   async headers() {
     const noindex = [{ key: "X-Robots-Tag", value: "noindex, nofollow" }];
-    return ["/dashboard/:path*", "/admin/:path*", "/admin", "/login", "/admin-login", "/admin-setup", "/auth/:path*", "/preview/:path*", "/preview"]
+    return ["/dashboard/:path*", "/admin/:path*", "/admin", "/login", "/admin-login", "/admin-setup", "/auth/:path*", "/preview/:path*", "/preview", "/o/:path*"]
       .map((source) => ({ source, headers: noindex }));
   },
 };

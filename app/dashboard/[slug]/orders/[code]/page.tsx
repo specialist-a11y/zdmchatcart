@@ -10,6 +10,7 @@ import { receiptUrl } from "@/lib/receipt";
 import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary } from "@/lib/order-text";
 import { insideServiceWindow } from "@/lib/whatsapp";
+import { orderPath } from "@/lib/order-link";
 import { applyPayment, balanceDue, METHOD_LABEL, type PaymentMethod } from "@/lib/part-payments";
 import { expandKits, overbooked, prettyDate, withRental } from "@/lib/rental";
 import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
@@ -264,6 +265,18 @@ export default async function OrderPage({ params, searchParams }: {
     <div className="stack" style={{ maxWidth: 760 }}>
       <PageHeader n={num("orders")} title={`Order ${order.code}`} actions={<span className={`badge ${order.status}`}>{order.status.replace(/_/g, " ")}</span>} />
       {msg && <p className={/^(Not sent|Not recorded|Couldn|Only owners|No customer|Connect|Set the)/.test(msg) ? "error" : "ok"}>{msg}</p>}
+      {order.no_whatsapp && (
+        <div className="card stack" style={{ borderColor: "var(--blue)", borderWidth: 2 }}>
+          <b>This customer doesn&apos;t use WhatsApp</b>
+          <p style={{ margin: 0 }}>
+            Call {customerPhone ? <a href={`tel:+${customerPhone}`}>+{customerPhone}</a> : "them"}
+            {order.contact_email ? <> or email <a href={`mailto:${order.contact_email}?subject=${encodeURIComponent(`Your order ${order.code}`)}&body=${encodeURIComponent(`Your order page: ${(process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "")}${orderPath(order.id)}`)}`}>{order.contact_email}</a></> : null}.
+            {" "}WhatsApp reminders and receipts won&apos;t reach them.
+          </p>
+          <p className="muted" style={{ margin: 0 }}>They follow the order, pay and send their transfer screenshot on <a href={orderPath(order.id)} target="_blank" rel="noreferrer">their order page</a>.</p>
+        </div>
+      )}
+
       <div className="card stack">
         <div className="table-wrap">
           <table>

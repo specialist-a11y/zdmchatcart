@@ -8,7 +8,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   const own = await shopForThisHost();
   const base = own ? `https://${own.host}` : site();
   return {
-    rules: [{ userAgent: "*", allow: "/", disallow: ["/dashboard", "/admin", "/admin-login", "/admin-setup", "/login", "/auth", "/api/", "/preview", "/l/"] }],
+    rules: [{ userAgent: "*", allow: "/", disallow: ["/dashboard", "/admin", "/admin-login", "/admin-setup", "/login", "/auth", "/api/", "/preview", "/l/", "/o/"] }],
     sitemap: base ? `${base}/sitemap.xml` : undefined,
     host: base || undefined,
   };

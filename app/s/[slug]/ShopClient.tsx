@@ -73,6 +73,8 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [focus, setFocus] = useState<Product | null>(() => products.find((p) => p.id === initialFocus) ?? null);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [hasWa, setHasWa] = useState(true);
   const [optIn, setOptIn] = useState(false);
   const [marketing, setMarketing] = useState(false);
   const [busy, setBusy] = useState<false | "pay" | "wa">(false);
@@ -261,7 +263,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   }
   const pickFor = (p: { id: string; opts: Variant[] }) => picks[p.id] ?? p.opts.find((v) => v.available)?.id ?? null;
 
-  async function checkout(payNow = false) {
+  async function checkout() {
     if (cartHasRental && !free) return setError("Pick your rental dates first");
     if (cartHasRental && times.length && !pickupTime) return setError("Choose a pickup time");
     if (cartHasRental && business.rental_agreement_url && !agreed) return setError("Please accept the rental agreement");
@@ -269,9 +271,10 @@ export default function ShopClient({ business, products, attribution, previewTem
     if (mode === "delivery" && zones.length && !zone) return setError("Choose your delivery area");
     if (mode === "delivery" && !address.trim()) return setError("Add the delivery address");
     if (slots.length && !slot) return setError(`Choose a ${mode === "delivery" ? "delivery" : hasGoods ? "pickup" : ""} time`.replace("  ", " "));
-    if (!phone.trim()) return setError("Add your WhatsApp number so we can send your receipt");
-    if (!shopperPhone(phone)) return setError("Check your WhatsApp number. Include the area code, like 246 555 1234");
-    setBusy(payNow ? "pay" : "wa");
+    if (!phone.trim()) return setError(hasWa ? "Add your WhatsApp number so we can send your receipt" : "Add a phone number we can call");
+    if (!shopperPhone(phone)) return setError(`Check your ${hasWa ? "WhatsApp" : "phone"} number. Include the area code, like 246 555 1234`);
+    if (!hasWa && !/^[^\s@]+@[^\s@]+\.[a-z]{2,}$/i.test(email.trim())) return setError("Add your email address, like name@gmail.com");
+    setBusy(hasWa ? "wa" : "pay");
     setError("");
     try {
       const res = await fetch("/api/orders", {
@@ -284,8 +287,9 @@ export default function ShopClient({ business, products, attribution, previewTem
           phone: phone || undefined,
           optIn,
           marketing,
-          paymentMethod: business.bank_transfer_enabled ? payBy : undefined,
-          payNow: payNow || undefined,
+          paymentMethod: hasWa ? (business.bank_transfer_enabled ? payBy : undefined) : payNoWa ?? undefined,
+          noWhatsapp: hasWa ? undefined : true,
+          email: hasWa ? undefined : email.trim(),
           rental: cartHasRental ? { start, days, pickupTime: pickupTime || undefined, agreed } : undefined,
           attribution: ref ?? undefined,
           fbc: consent === "yes" ? fbc ?? undefined : undefined,
@@ -299,14 +303,16 @@ export default function ShopClient({ business, products, attribution, previewTem
       if (!res.ok) throw new Error(json.error ?? "Something went wrong");
       setCart({});
       track("InitiateCheckout", { value: grand, num_items: count, content_ids: lines.map((l) => l.p.id), content_type: "product" });
-      window.location.href = json.payUrl ?? json.whatsappUrl;
+      window.location.href = json.orderUrl ?? json.payUrl ?? json.whatsappUrl;
     } catch (e: any) {
       setError(e.message);
       setBusy(false);
     }
   }
-  // Pay by card now: Fygaro connected, paying by card, and every price is known.
-  const canPayNow = cardPay && !onRequest && !(business.bank_transfer_enabled && payBy === "transfer");
+  // Without WhatsApp: card needs Fygaro, 1st Pay needs bank details; null means the shop calls to arrange payment.
+  const payNoWa: "card" | "transfer" | null = hasWa ? null
+    : cardPay && business.bank_transfer_enabled ? payBy
+    : cardPay ? "card" : business.bank_transfer_enabled ? "transfer" : null;
 
   const priceText = (p: Product, v?: Variant | null) => {
     const { amount, from } = v ? { amount: v.price, from: false } : displayPrice(p);
@@ -677,56 +683,76 @@ export default function ShopClient({ business, products, attribution, previewTem
                   )}
                 </div>
               )}
-              {business.bank_transfer_enabled && (
+              <div className="stack" style={{ gap: 6 }}>
+                <span className="s-small">Do you have WhatsApp?</span>
+                <div className="s-toggle" role="group" aria-label="Do you have WhatsApp?">
+                  <button type="button" aria-pressed={hasWa} onClick={() => { setHasWa(true); setError(""); }}>Yes</button>
+                  <button type="button" aria-pressed={!hasWa} onClick={() => { setHasWa(false); setError(""); }}>No</button>
+                </div>
+              </div>
+
+              {/* How to pay: card and/or 1st Pay, whichever the shop has set up. */}
+              {(hasWa ? business.bank_transfer_enabled : (cardPay || business.bank_transfer_enabled)) && (
                 <div className="stack" style={{ gap: 6 }}>
                   <span className="s-small">How would you like to pay?</span>
-                  {cardPay ? (
+                  {(hasWa || cardPay) && business.bank_transfer_enabled ? (
                     <div className="s-toggle" role="group" aria-label="How to pay">
                       <button type="button" aria-pressed={payBy === "card"} onClick={() => setPayBy("card")}>Card</button>
                       <button type="button" aria-pressed={payBy === "transfer"} onClick={() => setPayBy("transfer")}>1st Pay or bank transfer</button>
                     </div>
-                  ) : <b style={{ fontSize: 15 }}>1st Pay or bank transfer</b>}
-                  {payBy === "transfer" && <span style={{ fontSize: 14, color: "var(--muted)" }}>Pay with the 1st Pay app or from any bank. We send our details on WhatsApp, with your order code as the reference.</span>}
+                  ) : <b style={{ fontSize: 15 }}>{business.bank_transfer_enabled ? "1st Pay or bank transfer" : "Card"}</b>}
+                  {payNoWa === "transfer" || (hasWa && payBy === "transfer")
+                    ? <span style={{ fontSize: 14, color: "var(--muted)" }}>Pay with the 1st Pay app or from any bank, with your order code as the reference. {hasWa ? "We send our details on WhatsApp." : "Our details are on the next page, where you add your screenshot."}</span>
+                    : !hasWa && <span style={{ fontSize: 14, color: "var(--muted)" }}>Secure card payment by Fygaro on the next page. They email you a receipt.</span>}
                 </div>
               )}
 
               <div className="s-fields">
                 <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
-                <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" inputMode="tel" autoComplete="tel" placeholder="e.g. 246 555 1234" required aria-describedby="s-phone-hint" />
-                  <span id="s-phone-hint" style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Include your area code. Your receipt is sent here.</span></label>
+                {hasWa ? (
+                  <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" inputMode="tel" autoComplete="tel" placeholder="e.g. 246 555 1234" required aria-describedby="s-phone-hint" />
+                    <span id="s-phone-hint" style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Include your area code. Your receipt is sent here.</span></label>
+                ) : (
+                  <>
+                    <label>Phone number<input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" inputMode="tel" autoComplete="tel" placeholder="e.g. 246 555 1234" required aria-describedby="s-phone-hint" />
+                      <span id="s-phone-hint" style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Include your area code. We call this number about your order.</span></label>
+                    <label>Email<input value={email} onChange={(e) => setEmail(e.target.value)} type="email" inputMode="email" autoComplete="email" placeholder="e.g. name@gmail.com" required /></label>
+                  </>
+                )}
               </div>
-              {cartRecovery && (
+              {hasWa && cartRecovery && (
                 <label className="s-check">
                   <input type="checkbox" checked={optIn} onChange={(e) => setOptIn(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
                   Send me a WhatsApp reminder if I don&apos;t finish
                 </label>
               )}
-              <label className="s-check">
-                <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
-                Tell me about {business.name}&apos;s specials on WhatsApp
-              </label>
+              {hasWa && (
+                <label className="s-check">
+                  <input type="checkbox" checked={marketing} onChange={(e) => setMarketing(e.target.checked)} style={{ width: 20, minHeight: 20 }} />
+                  Tell me about {business.name}&apos;s specials on WhatsApp
+                </label>
+              )}
               <div className="s-sheethead" style={{ fontSize: 18 }}><b>Total</b><b>{money(grand, business.currency)}{onRequest ? " + quote" : ""}</b></div>
-              {canPayNow ? (
-                <>
-                  <button className="s-btn" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(true)}>
-                    {busy === "pay" ? "Opening secure payment..." : `Pay ${money(grand, business.currency)} now by card`}
-                  </button>
-                  <span style={{ fontSize: 14, color: "var(--muted)", textAlign: "center" }}>Secure card payment by Fygaro. Your receipt comes on WhatsApp.</span>
-                  <span className="s-or" style={{ textAlign: "center", fontSize: 14, color: "var(--muted)" }}>or</span>
-                  <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(false)}>
-                    {WA_ICON}{busy === "wa" ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp first" : "Order on WhatsApp first"}
-                  </button>
-                  <span style={{ fontSize: 14, color: "var(--muted)", textAlign: "center" }}>Ask a question before you pay. We reply with your order and a payment link.</span>
-                </>
-              ) : (
+              {hasWa ? (
                 <>
                   <ol className="s-how" aria-label="How ordering works">
                     <li>Your order code is typed for you in WhatsApp. Just press send.</li>
                     <li>{payBy === "transfer" && business.bank_transfer_enabled ? "We reply with our bank details. Send the transfer, then the screenshot." : `We reply with a secure card payment link${onRequest ? " once the price is confirmed" : ""}.`}</li>
                     <li>Your receipt arrives on WhatsApp.</li>
                   </ol>
-                  <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(false)}>
+                  <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout()}>
                     {WA_ICON}{busy ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp" : "Order on WhatsApp"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <ol className="s-how" aria-label="How ordering works">
+                    <li>Your order opens on its own page. Keep it: it shows your order and payment.</li>
+                    <li>{onRequest ? "We confirm the price and call you, then you pay on that page." : payNoWa === "card" ? "Pay by card there." : payNoWa === "transfer" ? "Pay by 1st Pay or bank, then add your screenshot there." : "We call you to arrange payment."}</li>
+                    <li>We call you about {cartHasRental ? "pickup" : "your order"}.</li>
+                  </ol>
+                  <button className="s-btn" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout()}>
+                    {busy ? "Placing your order..." : cartHasRental ? "Book now" : "Place order"}
                   </button>
                 </>
               )}
