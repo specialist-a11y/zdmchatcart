@@ -30,6 +30,9 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--teal); outl
 .card { border: 1.5px solid var(--line); border-radius: var(--radius); padding: 20px; background: #fff; }
 .stack { display: flex; flex-direction: column; gap: 16px; }
 .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+/* A checkbox with its text: box first, text beside it (labels are columns by default). */
+label.row { flex-direction: row; flex-wrap: nowrap; justify-content: flex-start; text-align: left; }
+label.row input[type="checkbox"] { flex: none; width: 20px; height: 20px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .muted { color: var(--muted); }
 .error { color: var(--coral); font-weight: 600; }
