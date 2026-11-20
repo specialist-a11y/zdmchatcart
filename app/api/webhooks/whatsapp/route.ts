@@ -7,6 +7,7 @@ import { depositNote, mapsLink, rentalLine } from "@/lib/rental";
 import { rentalSettings } from "@/lib/rental-server";
 import { asksCatalog, asksLocation, isReturning, welcomeBack } from "@/lib/wa-intents";
 import { sendCatalog } from "@/lib/wa-catalog";
+import { bookingTurn } from "@/lib/wa-booking";
 import { dueNow } from "@/lib/part-payments";
 import { ensurePaymentLink, getIntegration, sendFromBusiness } from "@/lib/payments";
 import { claimsPaid, findReference, proofPath, transferInstructions, wantsTransfer } from "@/lib/transfer";
@@ -75,10 +76,17 @@ export async function POST(req: Request) {
     // Bank transfer (migration 0018): on only with bank details saved.
     const { data: bank } = await admin.from("businesses").select("bank_transfer_enabled, bank_details").eq("id", businessId).maybeSingle<any>();
     const transferOn = !!(bank?.bank_transfer_enabled && bank.bank_details?.trim());
-    const code = extractOrderCode(msg.text);
+    let code = extractOrderCode(msg.text);
 
     let orderId: string | null = null;
     let reply: string | null = null;
+
+    // Ordering inside the chat (every plan): "I would like to rent…" starts it, each answer moves it on,
+    // and on YES the order is made, so the order-code reply below sends the summary and payment details.
+    if (!code && !msg.media && msg.text && customerId) {
+      const turn = await bookingTurn(admin, { businessId, customerId, text: msg.text, name: msg.name ?? null, phone: msg.from, site: site.replace(/\/$/, ""), slug: "" }).catch(() => ({ handled: false as const }));
+      if (turn.handled) { if (turn.code) code = turn.code; else reply = turn.reply ?? null; }
+    }
 
     if (code) {
       // products(kind) tells bookings from orders; fall back without it if the join isn't available.
