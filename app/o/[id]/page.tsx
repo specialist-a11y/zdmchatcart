@@ -5,8 +5,9 @@ import { checkOrderToken } from "@/lib/order-link";
 import { ensurePaymentLink } from "@/lib/payments";
 import { receiptUrl } from "@/lib/receipt";
 import { money } from "@/lib/order-text";
-import { prettyDate, unitLabel } from "@/lib/rental";
-import { balanceDue } from "@/lib/part-payments";
+import { mapsLink, prettyDate, unitLabel } from "@/lib/rental";
+import { balanceDue, dueNow } from "@/lib/part-payments";
+import { rentalSettings } from "@/lib/rental-server";
 import ProofUpload from "./ProofUpload";
 
 export const metadata: Metadata = { title: "Your order", robots: { index: false, follow: false } };
@@ -37,9 +38,9 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const { t = "" } = await searchParams;
   if (!checkOrderToken(id, t)) notFound();
   const admin = createAdminClient();
-  const { data: o } = await admin.from("orders")
-    .select("id, code, status, total, currency, amount_paid, paid_at, payment_method, payment_url, rental_start, rental_end, rental_days, rental_unit, pickup_time, deposit, fulfillment, slot_at, created_at, businesses(name, slug, logo_url, brand_color, bank_details, bank_transfer_enabled, whatsapp_number, public_email), order_items(name, unit_price, quantity)")
-    .eq("id", id).maybeSingle<any>();
+  const sel = "id, business_id, code, status, total, currency, amount_paid, paid_at, payment_method, payment_url, rental_start, rental_end, rental_days, rental_unit, pickup_time, deposit, fulfillment, slot_at, created_at, businesses(name, slug, logo_url, brand_color, bank_details, bank_transfer_enabled, whatsapp_number, public_email), order_items(name, unit_price, quantity)";
+  let { data: o, error } = await admin.from("orders").select(`${sel}, deposit_kind`).eq("id", id).maybeSingle<any>();
+  if (error) ({ data: o } = await admin.from("orders").select(sel).eq("id", id).maybeSingle<any>());
   if (!o) notFound();
   const b = o.businesses ?? {};
   const accent = /^#[0-9a-f]{6}$/i.test(b.brand_color ?? "") ? b.brand_color : "#0B0F0E";
@@ -52,11 +53,18 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
   const pending = o.status === "transfer_pending";
   // Card link for the balance (made on first visit, then reused).
   const payUrl = open && !pending && !priceToConfirm && balance > 0 ? await ensurePaymentLink(admin, o.id).catch(() => null) : null;
+  // Booking deposit: the deposit first, then the balance at pickup.
+  const booking = o.deposit_kind === "booking" && Number(o.deposit ?? 0) > 0;
+  const due = paid ? 0 : dueNow(o);
+  const depositDue = booking && paidSoFar < Number(o.deposit);
+  // Once they've paid something, show where to collect.
+  const pin = o.rental_start && (paid || paidSoFar > 0) ? mapsLink((await rentalSettings(admin, o.business_id)).pickupMap) : null;
   const call = b.whatsapp_number ? `+${String(b.whatsapp_number).replace(/\D/g, "")}` : null;
 
   const status = o.status === "cancelled" ? ["Cancelled", "#fde8e7", "#b42318"]
     : paid ? ["Paid", "#dcf8c6", "#146c43"]
     : pending ? ["Payment being checked", "#e6efff", "#1D5FD1"]
+    : booking && paidSoFar > 0 ? ["Date secured", "#dcf8c6", "#146c43"]
     : paidSoFar > 0 ? ["Part paid", "#fff4d6", "#8a5a00"]
     : priceToConfirm ? ["We'll confirm the price", "#fff4d6", "#8a5a00"]
     : ["Waiting for payment", "#fff4d6", "#8a5a00"];
@@ -78,12 +86,16 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <div key={n} className="op-row"><span>{i.quantity} x {i.name}</span><span>{Number(i.unit_price) ? money(Number(i.unit_price) * i.quantity, o.currency) : "Price to confirm"}</span></div>
         ))}
         {o.rental_start && (
-          <p className="op-muted" style={{ margin: 0 }}>Pick up {prettyDate(o.rental_start)}{o.pickup_time ? ` at ${o.pickup_time}` : ""}. Return {prettyDate(o.rental_end)} ({o.rental_days} {unitLabel(o.rental_unit, o.rental_days)}).{Number(o.deposit) > 0 ? " The deposit is refunded when everything comes back in good condition." : ""}</p>
+          <p className="op-muted" style={{ margin: 0 }}>Pick up {prettyDate(o.rental_start)}{o.pickup_time ? ` at ${o.pickup_time}` : ""}. Return {prettyDate(o.rental_end)} ({o.rental_days} {unitLabel(o.rental_unit, o.rental_days)}).{Number(o.deposit) > 0 && !booking ? " The deposit is refunded when everything comes back in good condition." : ""}</p>
         )}
         <div className="op-row" style={{ borderTop: "1px solid #e3e6e5", paddingTop: 10 }}><b>Total</b><b>{money(o.total, o.currency)}</b></div>
+        {booking && !paid && paidSoFar === 0 && <>
+          <div className="op-row"><b>Deposit to secure your date</b><b>{money(o.deposit, o.currency)}</b></div>
+          <div className="op-row"><span>Balance, due at pickup</span><span>{money(balance - Number(o.deposit), o.currency)}</span></div>
+        </>}
         {paidSoFar > 0 && !paid && <>
-          <div className="op-row"><span>Paid so far</span><span>{money(paidSoFar, o.currency)}</span></div>
-          <div className="op-row"><b>Balance to pay</b><b>{money(balance, o.currency)}</b></div>
+          <div className="op-row"><span>{booking && paidSoFar >= Number(o.deposit) ? "Deposit paid" : "Paid so far"}</span><span>{money(paidSoFar, o.currency)}</span></div>
+          <div className="op-row"><b>{booking ? "Balance, due at pickup" : "Balance to pay"}</b><b>{money(balance, o.currency)}</b></div>
         </>}
       </div>
 
@@ -92,6 +104,14 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
           <h2>Thank you!</h2>
           <p style={{ margin: 0 }}>Your payment is confirmed.{o.rental_start ? " See you at pickup." : ""}</p>
           <a className="op-btn ghost" href={receiptUrl(o.id)} target="_blank" rel="noreferrer">View your receipt</a>
+        </div>
+      )}
+
+      {pin && (
+        <div className="op-card">
+          <h2>Pickup location</h2>
+          <p style={{ margin: 0 }}>Pick up {prettyDate(o.rental_start)}{o.pickup_time ? ` at ${o.pickup_time}` : ""}. Bring everything back {prettyDate(o.rental_end)}.</p>
+          <a className="op-btn" style={{ background: accent, borderColor: accent }} href={pin} target="_blank" rel="noreferrer">Open the pin in Google Maps</a>
         </div>
       )}
 
@@ -106,20 +126,21 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
         <div className="op-card"><p style={{ margin: 0 }}>{b.name} will confirm the price and call you. Then you can pay here.</p></div>
       )}
 
-      {open && !pending && !priceToConfirm && balance > 0 && (
+      {open && !pending && !priceToConfirm && due > 0 && (
         <>
           {payUrl && (
             <div className="op-card">
               <h2>Pay by card</h2>
-              <a className="op-btn" style={{ background: accent, borderColor: accent }} href={payUrl}>Pay {money(balance, o.currency)} now</a>
+              <a className="op-btn" style={{ background: accent, borderColor: accent }} href={payUrl}>{depositDue ? `Pay the ${money(due, o.currency)} deposit now` : `Pay ${money(due, o.currency)} now`}</a>
               <span className="op-muted">Secure card payment by Fygaro. They email you a receipt.</span>
             </div>
           )}
           {bankOn && (
             <div className="op-card">
               <h2>{payUrl ? "Or pay by 1st Pay or bank transfer" : "Pay by 1st Pay or bank transfer"}</h2>
+              <p style={{ margin: 0 }}>{depositDue ? "Send the deposit to secure your date. Use your order code as the reference." : "Use your order code as the reference."}</p>
               <pre className="op-pre">{b.bank_details.trim()}</pre>
-              <div className="op-row"><span>Amount</span><b>{money(balance, o.currency)}</b></div>
+              <div className="op-row"><span>{depositDue ? "Deposit to send now" : "Amount"}</span><b>{money(due, o.currency)}</b></div>
               <div className="op-row"><span>Reference</span><b>{o.code}</b></div>
               <p className="op-muted" style={{ margin: 0 }}>When it's sent, add your screenshot here. We confirm once it shows in our account.</p>
               <ProofUpload id={o.id} token={t} accent={accent} />

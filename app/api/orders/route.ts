@@ -4,7 +4,7 @@ import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceCart, waLink } from "@/lib/order-text";
 import { rentalSpan, addDays, availability, expandKits, kitFree, overbooked, pickupOptions, priceRentalCart, validateDates, type Kits, type PricedLine, type RentalProduct } from "@/lib/rental";
-import { evePickupOn, loadBookings, loadRentalCatalog } from "@/lib/rental-server";
+import { loadBookings, loadRentalCatalog, rentalSettings } from "@/lib/rental-server";
 import { todayIn } from "@/lib/billing";
 import { upsertCustomer } from "@/lib/customers";
 import { shopperPhone } from "@/lib/shopper-phone";
@@ -79,6 +79,7 @@ async function createOrder(req: Request) {
   const rentalIds = new Set(rentals.map((p) => p.id));
   let rental: { start: string; end: string; days: number; unit: string; deposit: number; pickupTime: string | null; agreedAt: string | null } | null = null;
   const buffer = business.rental_buffer_days ?? 0;
+  let depositKind: "refundable" | "booking" = "refundable";
   let rentalLines: PricedLine[] = [];
   let rentalTotal = 0;
   // All the shop's rental items, so packages can check the items inside them.
@@ -86,7 +87,9 @@ async function createOrder(req: Request) {
   if (rentals.length) {
     if (!body.rental) return NextResponse.json({ error: "Pick your rental dates first." }, { status: 400 });
     // Evening-before pickup (0028): start is the event date, pickup is the day before, only event nights are charged.
-    const eve = await evePickupOn(admin, business.id);
+    const settings = await rentalSettings(admin, business.id);
+    const eve = settings.eve;
+    depositKind = settings.depositMode;
     const bad = validateDates(body.rental.start, body.rental.days, todayIn(), (business.rental_lead_days ?? 0) + (eve ? 1 : 0));
     if (bad) return NextResponse.json({ error: bad }, { status: 400 });
     if (business.rental_agreement_url && !body.rental.agreed) return NextResponse.json({ error: "Please accept the rental agreement." }, { status: 400 });
@@ -97,7 +100,7 @@ async function createOrder(req: Request) {
     const { kits } = rentalCatalog;
     const bookings = expandKits(await loadBookings(admin, business.id, pickup, end, buffer), kits);
     const free = kitFree(availability(rentalCatalog.products, bookings, pickup, end, buffer), kits);
-    const r = priceRentalCart(body.items.filter((i) => rentalIds.has(i.productId)), rentals, body.rental.days, free, kits);
+    const r = priceRentalCart(body.items.filter((i) => rentalIds.has(i.productId)), rentals, body.rental.days, free, kits, settings.depositMode);
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 });
     rentalLines = r.items;
     rentalTotal = r.subtotal;
@@ -174,6 +177,8 @@ async function createOrder(req: Request) {
       ...(rental ? {
         rental_start: rental.start, rental_end: rental.end, rental_days: rental.days, rental_unit: rental.unit,
         pickup_time: rental.pickupTime, agreement_accepted_at: rental.agreedAt, deposit: rental.deposit,
+        // Booking deposits (0028): part of the price, paid first. Only set then, so older databases still take orders.
+        ...(depositKind === "booking" && rental.deposit > 0 ? { deposit_kind: "booking" } : {}),
       } : {}),
     })
     .select("id, created_at")

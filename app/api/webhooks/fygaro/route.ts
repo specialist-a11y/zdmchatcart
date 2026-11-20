@@ -66,8 +66,19 @@ export async function POST(req: Request) {
   if (selErr) ({ data: order } = await find(sel));
   if (!order) return NextResponse.json({ ok: true, note: "order not found" });
 
-  // After a part payment (0026) the card link is for the balance, so check against that.
-  if (Math.round(Number(payload.amount) * 100) < Math.round(balanceDue(order.total, order.amount_paid) * 100)) {
+  // Less than the balance: a booking deposit or part payment by card (0026). Record it, keep the balance open.
+  const paidCents = Math.round(Number(payload.amount) * 100);
+  const balanceCents = Math.round(balanceDue(order.total, order.amount_paid) * 100);
+  if (paidCents > 0 && paidCents < balanceCents && order.amount_paid != null) {
+    const amount = paidCents / 100;
+    const { error: payErr } = await admin.from("order_payments").insert({ business_id: integ.business_id, order_id: order.id, amount, method: "card", reference: String(payload.transactionId ?? "").slice(0, 80) || null });
+    if (!payErr) {
+      await admin.from("orders").update({ amount_paid: Math.round(Number(order.amount_paid) * 100 + paidCents) / 100, payment_url: null, status: "awaiting_payment" }).eq("id", order.id);
+      if (order.customers?.phone) await sendReceipt(admin, order.id).catch(() => null);
+      return NextResponse.json({ ok: true, note: "part payment recorded" });
+    }
+  }
+  if (paidCents < balanceCents) {
     await admin.from("orders").update({ note: `Fygaro paid ${payload.amount} ${payload.currency}, less than total. Check manually.` }).eq("id", order.id);
     return NextResponse.json({ ok: true, note: "amount mismatch" });
   }

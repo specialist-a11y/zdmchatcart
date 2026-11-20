@@ -1,6 +1,6 @@
 import "server-only";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { addDays, holdsUnits, kitsFrom, type Booking, type Kits } from "./rental";
+import { addDays, holdsUnits, kitsFrom, type Booking, type DepositMode, type Kits } from "./rental";
 
 /** Bookings that hold units at any point between from and to (end exclusive), widened by the buffer days. */
 export async function loadBookings(admin: SupabaseClient, businessId: string, from: string, to: string, bufferDays = 0, excludeOrderId?: string, upTo?: { id: string; created_at: string }): Promise<Booking[]> {
@@ -29,8 +29,14 @@ export async function loadRentalCatalog(admin: SupabaseClient, businessId: strin
   return { products: rows.map((r: any) => ({ id: r.id, name: r.name, stock: r.stock })), kits: kitsFrom(rows as any[]) };
 }
 
+/** Rental settings from migration 0028 (defaults until it has run). */
+export async function rentalSettings(admin: SupabaseClient, businessId: string): Promise<{ eve: boolean; depositMode: DepositMode; pickupMap: string | null }> {
+  const { data, error } = await admin.from("businesses").select("rental_eve_pickup, rental_deposit_mode, rental_pickup_map").eq("id", businessId).maybeSingle<any>();
+  if (error || !data) return { eve: false, depositMode: "refundable", pickupMap: null };
+  return { eve: !!data.rental_eve_pickup, depositMode: data.rental_deposit_mode === "booking" ? "booking" : "refundable", pickupMap: data.rental_pickup_map ?? null };
+}
+
 /** Evening-before pickup (migration 0028); false until it has run. */
 export async function evePickupOn(admin: SupabaseClient, businessId: string) {
-  const { data, error } = await admin.from("businesses").select("rental_eve_pickup").eq("id", businessId).maybeSingle<any>();
-  return !error && !!data?.rental_eve_pickup;
+  return (await rentalSettings(admin, businessId)).eve;
 }

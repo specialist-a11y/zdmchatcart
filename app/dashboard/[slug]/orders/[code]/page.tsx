@@ -11,7 +11,7 @@ import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary } from "@/lib/order-text";
 import { insideServiceWindow } from "@/lib/whatsapp";
 import { orderPath } from "@/lib/order-link";
-import { applyPayment, balanceDue, METHOD_LABEL, type PaymentMethod } from "@/lib/part-payments";
+import { applyPayment, balanceDue, dueNow, METHOD_LABEL, type PaymentMethod } from "@/lib/part-payments";
 import { expandKits, overbooked, prettyDate, withRental } from "@/lib/rental";
 import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 
@@ -333,14 +333,14 @@ export default async function OrderPage({ params, searchParams }: {
           <div className="kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
             <div className="kpi"><small>Pick up</small><b>{prettyDate(order.rental_start)}{order.pickup_time ? `, ${order.pickup_time}` : ""}</b></div>
             <div className="kpi"><small>Return</small><b>{prettyDate(order.rental_end)}</b></div>
-            <div className="kpi"><small>Deposit</small><b>{Number(order.deposit) > 0 ? `${money(order.deposit, order.currency)}${order.deposit_returned_at ? " refunded" : ""}` : "None"}</b></div>
+            <div className="kpi"><small>{order.deposit_kind === "booking" ? "Deposit to secure the date" : "Deposit"}</small><b>{Number(order.deposit) > 0 ? `${money(order.deposit, order.currency)}${order.deposit_kind === "booking" ? (Number(order.amount_paid ?? 0) >= Number(order.deposit) || order.paid_at ? " paid" : " due") : order.deposit_returned_at ? " refunded" : ""}` : "None"}</b></div>
           </div>
           {clash.length > 0 && <p className="error" style={{ margin: 0 }}>Double booked: {clash.join(", ")} {clash.length > 1 ? "are" : "is"} held by another order on these dates. Check the rental schedule before confirming.</p>}
           <p className="muted" style={{ margin: 0 }}>{order.agreement_accepted_at ? `Rental agreement accepted ${new Date(order.agreement_accepted_at).toLocaleString("en-GB", { timeZone: "America/Barbados", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}.` : "No rental agreement on file for this order."}</p>
           <div className="row">
-            {!order.picked_up_at && order.paid_at && <form action={rentalStep}><input type="hidden" name="step" value="out" /><button className="btn">Picked up</button></form>}
+            {!order.picked_up_at && (order.paid_at || (order.deposit_kind === "booking" && Number(order.amount_paid ?? 0) > 0)) && <form action={rentalStep}><input type="hidden" name="step" value="out" /><button className="btn">Picked up</button></form>}
             {order.picked_up_at && !order.returned_at && <form action={rentalStep}><input type="hidden" name="step" value="back" /><button className="btn">Returned</button></form>}
-            {order.returned_at && Number(order.deposit) > 0 && !order.deposit_returned_at && <form action={rentalStep}><input type="hidden" name="step" value="deposit" /><button className="btn secondary">Deposit refunded</button></form>}
+            {order.returned_at && Number(order.deposit) > 0 && order.deposit_kind !== "booking" && !order.deposit_returned_at && <form action={rentalStep}><input type="hidden" name="step" value="deposit" /><button className="btn secondary">Deposit refunded</button></form>}
             {customerPhone && !order.picked_up_at && <form action={sendRentalReminder}><input type="hidden" name="kind" value="pickup" /><button className="btn secondary">Send pickup reminder</button></form>}
             {customerPhone && order.picked_up_at && !order.returned_at && <form action={sendRentalReminder}><input type="hidden" name="kind" value="return" /><button className="btn secondary">Send return reminder</button></form>}
             <Link className="btn secondary" href={`/dashboard/${slug}/orders/rentals`}>Rental schedule</Link>
@@ -398,7 +398,7 @@ export default async function OrderPage({ params, searchParams }: {
             <form action={recordPayment} className="stack" style={{ gap: 8 }}>
               <p className="muted" style={{ margin: 0 }}>Check your bank or 1st Pay first. Enter only the money that is in your account.</p>
               <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
-                <label style={{ flex: "1 1 140px" }}>Amount received ({order.currency})<input name="amount" inputMode="decimal" defaultValue={balance.toFixed(2)} required /></label>
+                <label style={{ flex: "1 1 140px" }}>Amount received ({order.currency})<input name="amount" inputMode="decimal" defaultValue={dueNow(order).toFixed(2)} required /></label>
                 <label style={{ flex: "1 1 180px" }}>How they paid<select name="method" defaultValue="transfer"><option value="transfer">1st Pay / bank transfer</option><option value="cash">Cash</option></select></label>
                 <label style={{ flex: "1 1 160px" }}>Reference (optional)<input name="reference" maxLength={80} defaultValue={order.transfer_reference ?? ""} /></label>
               </div>

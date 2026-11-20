@@ -11,6 +11,7 @@ import type { TokenState } from "@/lib/health";
 import { changeRole, inviteMember, removeMember } from "./team-actions";
 import { cleanHours, hasHours } from "@/lib/hours";
 import { subscribeApp } from "@/lib/whatsapp";
+import { mapsLink } from "@/lib/rental";
 
 async function requireAdmin(slug: string) {
   const ctx = await requireMembership(slug);
@@ -38,7 +39,7 @@ export default async function SettingsPage({ params, searchParams }: {
   const sc = (social?.config ?? {}) as { page_name?: string; ig_username?: string | null; ig_followers?: number | null; pages?: { id: string; name: string; ig: string | null }[] };
   const path = `/dashboard/${slug}/settings`;
   const { data: bank } = await createAdminClient().from("businesses").select("bank_transfer_enabled, bank_details, rental_agreement_url, rental_pickup_times, rental_lead_days, rental_buffer_days").eq("id", business.id).single();
-  const { data: eveRow } = await createAdminClient().from("businesses").select("rental_eve_pickup").eq("id", business.id).maybeSingle<any>().then((r) => r, () => ({ data: null }));
+  const { data: eveRow } = await createAdminClient().from("businesses").select("rental_eve_pickup, rental_deposit_mode, rental_pickup_map").eq("id", business.id).maybeSingle<any>().then((r) => r, () => ({ data: null }));
   const { count: rentalCount } = await createAdminClient().from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("rental", true);
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
 
@@ -65,8 +66,14 @@ export default async function SettingsPage({ params, searchParams }: {
       rental_buffer_days: n("rental_buffer_days", 7),
     }).eq("id", business.id);
     // Evening-before pickup (0028) saved on its own, so the rest still saves before that migration.
-    const { error: eveErr } = await createAdminClient().from("businesses").update({ rental_eve_pickup: formData.get("rental_eve_pickup") === "on" }).eq("id", business.id);
-    redirect(`${path}?msg=${encodeURIComponent(eveErr && formData.get("rental_eve_pickup") === "on" ? "Rental settings saved. Evening-before pickup needs migration 0028_rental_evening_pickup.sql." : "Rental settings saved")}#rentals`);
+    const pin = String(formData.get("rental_pickup_map") ?? "").trim().slice(0, 300);
+    if (pin && !mapsLink(pin)) redirect(`${path}?msg=${encodeURIComponent("Pickup location: paste a Google Maps link, or the pin as 13.159611, -59.620823")}#rentals`);
+    const { error: eveErr } = await createAdminClient().from("businesses").update({
+      rental_eve_pickup: formData.get("rental_eve_pickup") === "on",
+      rental_deposit_mode: formData.get("rental_deposit_mode") === "booking" ? "booking" : "refundable",
+      rental_pickup_map: pin || null,
+    }).eq("id", business.id);
+    redirect(`${path}?msg=${encodeURIComponent(eveErr ? "Rental settings saved. Evening pickup, deposit type and pickup location need migration 0028_rental_evening_pickup.sql." : "Rental settings saved")}#rentals`);
   }
 
   async function disconnectSocial() {
@@ -218,6 +225,16 @@ export default async function SettingsPage({ params, searchParams }: {
             Customers pick their event date and collect the evening before, free. They return the day after.
           </label>
         </div>
+        <label>Deposit
+          <select name="rental_deposit_mode" defaultValue={eveRow?.rental_deposit_mode ?? "refundable"} disabled={!isAdmin}>
+            <option value="booking">Paid first to secure the date, part of the price (balance due at pickup)</option>
+            <option value="refundable">Refundable security deposit, added on top and given back</option>
+          </select>
+          <span className="muted" style={{ fontWeight: 400, fontSize: 13 }}>Set the amount on each rental item in Products. One deposit per booking: the highest one in the cart.</span>
+        </label>
+        <label>Pickup location (sent to the customer once they&apos;ve paid)
+          <input name="rental_pickup_map" defaultValue={eveRow?.rental_pickup_map ?? ""} disabled={!isAdmin} placeholder="Google Maps link, or the pin: 13.159611, -59.620823" />
+        </label>
         {isAdmin && <button className="btn" style={{ alignSelf: "flex-start" }}>Save rental settings</button>}
       </form>
 

@@ -30,7 +30,7 @@ type Business = {
   shop_theme?: string | null; special_text?: string | null; special_ends_at?: string | null; announcement?: string | null;
   delivery_zones?: unknown; pickup_enabled?: boolean | null; slot_minutes?: number | null; hours?: unknown;
   bank_transfer_enabled?: boolean | null;
-  rental_agreement_url?: string | null; rental_pickup_times?: string | null; rental_lead_days?: number | null; rental_eve_pickup?: boolean | null;
+  rental_agreement_url?: string | null; rental_pickup_times?: string | null; rental_lead_days?: number | null; rental_eve_pickup?: boolean | null; rental_deposit_mode?: string | null;
 };
 
 declare global { interface Window { fbq?: (...args: any[]) => void; _fbq?: unknown } }
@@ -222,7 +222,9 @@ export default function ShopClient({ business, products, attribution, previewTem
   const cartHasRental = lines.some((l) => l.p.rental);
   // One deposit per booking: the highest deposit of the rental items in the cart (the server works it out the same way).
   const deposit = lines.reduce((s, l) => Math.max(s, l.p.rental ? Number(l.p.deposit ?? 0) : 0), 0);
-  const total = lines.reduce((s, l) => s + l.price * l.q, 0) + deposit;
+  // Booking deposit: part of the price (paid first to secure the date), so not added on top.
+  const bookingDeposit = business.rental_deposit_mode === "booking";
+  const total = lines.reduce((s, l) => s + l.price * l.q, 0) + (bookingDeposit ? 0 : deposit);
   const rentalReady = !cartHasRental || (!!free && !dateError && (!times.length || !!pickupTime) && (!business.rental_agreement_url || agreed));
   // Dates changed: keep rental items within what's free.
   useEffect(() => {
@@ -384,7 +386,7 @@ export default function ShopClient({ business, products, attribution, previewTem
         </div>
         {p.rental && (Number(p.deposit ?? 0) > 0 || (p.min_days ?? 1) > 1 || (left !== null && left > 0 && left <= 3)) && (
           <small className="s-rentnote">
-            {[Number(p.deposit ?? 0) > 0 ? `${money(Number(p.deposit), business.currency)} refundable deposit` : null,
+            {[Number(p.deposit ?? 0) > 0 ? `${money(Number(p.deposit), business.currency)} ${business.rental_deposit_mode === "booking" ? "deposit to book" : "refundable deposit"}` : null,
               (p.min_days ?? 1) > 1 ? `minimum ${p.min_days} ${unitLabel(p.rental_unit, p.min_days ?? 1)}` : null,
               left !== null && left > 0 && left <= 3 ? `${left} free on your dates` : null].filter(Boolean).join(" · ")}
           </small>
@@ -627,7 +629,8 @@ export default function ShopClient({ business, products, attribution, previewTem
                     <b>{l.price ? money(l.price * l.q, business.currency) : "On request"}</b>
                   </li>
                 ))}
-                {deposit > 0 && <li><span>Refundable deposit</span><span /><b>{money(deposit, business.currency)}</b></li>}
+                {deposit > 0 && !bookingDeposit && <li><span>Refundable deposit</span><span /><b>{money(deposit, business.currency)}</b></li>}
+                {deposit > 0 && bookingDeposit && <li><span>Deposit to secure your date (balance at pickup)</span><span /><b>{money(Math.min(deposit, total), business.currency)}</b></li>}
                 {fee > 0 && <li><span>Delivery · {zone!.name}</span><span /><b>{money(fee, business.currency)}</b></li>}
               </ul>
 

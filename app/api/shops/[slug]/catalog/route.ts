@@ -19,7 +19,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
     .eq("slug", slug).maybeSingle<any>();
   if (!b) return NextResponse.json({ error: "Shop not found" }, { status: 404, headers: CORS });
   const [{ data: eve }, { data: fy }, ent] = await Promise.all([
-    admin.from("businesses").select("rental_eve_pickup").eq("id", b.id).maybeSingle<any>().then((r) => r, () => ({ data: null })),
+    admin.from("businesses").select("rental_eve_pickup, rental_deposit_mode").eq("id", b.id).maybeSingle<any>().then((r) => r, () => ({ data: null })),
     admin.from("integrations").select("status, config").eq("business_id", b.id).eq("provider", "fygaro").maybeSingle<any>(),
     getEntitlements(b.id, admin).catch(() => null),
   ]);
@@ -36,6 +36,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ slug: s
       rental: {
         agreementUrl: b.rental_agreement_url, pickupTimes: pickupOptions(b.rental_pickup_times),
         leadDays: b.rental_lead_days ?? 0, evePickup: !!eve?.rental_eve_pickup,
+        depositMode: eve?.rental_deposit_mode === "booking" ? "booking" : "refundable",
       },
     },
     products: (products ?? []).map((p: any) => ({

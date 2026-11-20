@@ -1,3 +1,5 @@
+import { money } from "./order-text.ts";
+
 /**
  * Rental mode: products rented by the day or night, booked for dates, with a set number of units owned.
  * Pure functions (no server imports) so they can be tested and used in the shop page.
@@ -141,6 +143,9 @@ export function overbooked(products: { id: string; stock: number | null }[], boo
 
 export type PricedLine = { product_id: string | null; name: string; unit_price: number; quantity: number };
 
+/** 'refundable': a security deposit on top, given back. 'booking': part of the price, paid first to secure the date. */
+export type DepositMode = "refundable" | "booking";
+
 /**
  * Price a cart that has rental items: each rental line costs price x days.
  * The deposit is one per booking: the highest deposit of the rental items in the cart, added as its own line.
@@ -153,6 +158,7 @@ export function priceRentalCart(
   days: number,
   free: Record<string, number>,
   kits: Kits = {},
+  depositMode: DepositMode = "refundable",
 ): { items: PricedLine[]; subtotal: number; deposit: number; unit: RentalUnit } | { error: string } {
   const byId = new Map(catalog.map((p) => [p.id, p]));
   const merged = new Map<string, number>();
@@ -193,6 +199,8 @@ export function priceRentalCart(
       return { error: name ? `Not enough ${name} free on those dates for everything in your cart. Try other dates or remove an item.` : "Some of the equipment in your cart is already booked on those dates. Try other dates or remove an item." };
     }
   }
+  // A booking deposit is part of the price (paid first to secure the date), so it isn't added on top.
+  if (depositMode === "booking") return { items, subtotal: cents / 100, deposit: Math.min(depositCents, cents) / 100, unit };
   if (depositCents > 0) items.push({ product_id: null, name: "Refundable deposit", unit_price: depositCents / 100, quantity: 1 });
   return { items, subtotal: (cents + depositCents) / 100, deposit: depositCents / 100, unit };
 }
@@ -223,9 +231,29 @@ export function schedule<T extends { rental_start: string; rental_end: string }>
 }
 
 /** Order summary text plus the rental dates line, when the order is a rental. */
-export function withRental(summary: string, o: { rental_start?: string | null; rental_end?: string | null; rental_days?: number | null; pickup_time?: string | null; rental_unit?: string | null; deposit?: number | string | null }) {
+export function withRental(summary: string, o: { rental_start?: string | null; rental_end?: string | null; rental_days?: number | null; pickup_time?: string | null; rental_unit?: string | null; deposit?: number | string | null; deposit_kind?: string | null; total?: number | string | null; currency?: string | null }) {
   const line = rentalLine(o, o.rental_unit ?? "day");
   if (!line) return summary;
-  const dep = Number(o.deposit ?? 0) > 0 ? "\nThe deposit is refunded when everything comes back in good condition." : "";
-  return `${summary}\n${line}${dep}`;
+  const dep = depositNote(o);
+  return `${summary}\n${line}${dep ? `\n${dep}` : ""}`;
+}
+
+/** What the customer is told about the deposit. */
+export function depositNote(o: { deposit?: number | string | null; deposit_kind?: string | null; total?: number | string | null; currency?: string | null }) {
+  const d = Number(o.deposit ?? 0);
+  if (!(d > 0)) return "";
+  if (o.deposit_kind === "booking") {
+    const cur = o.currency ?? "BBD";
+    const balance = Math.max(0, Number(o.total ?? 0) - d);
+    return `Pay the ${money(d, cur)} deposit to secure your date.${balance > 0 ? ` The balance of ${money(balance, cur)} is due at pickup.` : ""}`;
+  }
+  return "The deposit is refunded when everything comes back in good condition.";
+}
+
+/** A pickup location as a Google Maps link: "13.159611, -59.620823" or a map URL. Null if it isn't either. */
+export function mapsLink(raw: string | null | undefined): string | null {
+  const s = (raw ?? "").trim();
+  const ll = s.match(/^(-?\d{1,2}(?:\.\d+)?)\s*,\s*(-?\d{1,3}(?:\.\d+)?)$/);
+  if (ll) return `https://www.google.com/maps?q=${ll[1]},${ll[2]}`;
+  return /^https:\/\/\S+$/.test(s) ? s : null;
 }

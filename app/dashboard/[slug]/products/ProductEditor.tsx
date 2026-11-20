@@ -367,7 +367,7 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                       <label>Charged per
                         <select value={form.rental_unit ?? "day"} onChange={(e) => set({ rental_unit: e.target.value })}><option value="day">Day</option><option value="night">Night</option></select>
                       </label>
-                      <label>Refundable deposit per booking ({currency})<input type="number" min="0" step="0.01" inputMode="decimal" value={form.deposit ?? ""} onChange={(e) => set({ deposit: e.target.value })} placeholder="0" /></label>
+                      <label>Deposit per booking ({currency})<input type="number" min="0" step="0.01" inputMode="decimal" value={form.deposit ?? ""} onChange={(e) => set({ deposit: e.target.value })} placeholder="0" /></label>
                       <label>Minimum {form.rental_unit === "night" ? "nights" : "days"}<input type="number" min="1" max="30" inputMode="numeric" value={form.min_days ?? "1"} onChange={(e) => set({ min_days: e.target.value })} /></label>
                     </div>
                   )}
@@ -397,7 +397,7 @@ export default function ProductEditor({ slug, currency, items, canDelete, templa
                       </fieldset>
                     );
                   })()}
-                  <span className="muted" style={{ fontSize: 13 }}>For rentals, Stock is how many you own (1 if blank). It doesn&apos;t go down when rented: each booking holds units for its dates. The price is per {form.rental_unit === "night" ? "night" : "day"}. One deposit per booking: when several items are booked together, the highest deposit is charged once.</span>
+                  <span className="muted" style={{ fontSize: 13 }}>For rentals, Stock is how many you own (1 if blank). It doesn&apos;t go down when rented: each booking holds units for its dates. The price is per {form.rental_unit === "night" ? "night" : "day"}. One deposit per booking: when several items are booked together, the highest deposit is charged once. In Settings, Rentals, choose whether it is refundable or paid first to secure the date.</span>
                 </div>
               </details>
             )}

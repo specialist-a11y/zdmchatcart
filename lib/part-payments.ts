@@ -22,3 +22,13 @@ export function applyPayment(total: number | string, paidSoFar: number | string 
   const paid = c(paidSoFar) + amount;
   return { amount: amount / 100, paid: paid / 100, balance: (c(total) - paid) / 100, full: paid >= c(total) } as const;
 }
+
+/**
+ * What the customer should pay now. With a booking deposit, the deposit first (to secure the date), then the balance.
+ */
+export function dueNow(o: { total: number | string; amount_paid?: number | string | null; deposit?: number | string | null; deposit_kind?: string | null }) {
+  const balance = balanceDue(o.total, o.amount_paid);
+  const dep = Number(o.deposit ?? 0), paid = Number(o.amount_paid ?? 0);
+  if (o.deposit_kind === "booking" && dep > 0 && paid < dep) return Math.min(balance, Math.round((dep - paid) * 100) / 100);
+  return balance;
+}

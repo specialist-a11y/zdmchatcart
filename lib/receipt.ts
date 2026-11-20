@@ -77,7 +77,7 @@ export function receiptModel(r: ReceiptInput) {
     balance: partial ? two(total - paidCents / 100) : null,
     ref: !txn || cash ? null : transfer ? (txn.slice(9) === "confirmed" ? null : txn.slice(9)) : txn.length > 12 ? `${txn.slice(0, 4)}...${txn.slice(-3)}` : txn,
     thanks: first ? `Thank you, ${first}!` : "Thank you!",
-    pickupNote: partial ? "Please pay the balance before pickup." : r.order.fulfillment === "delivery" ? "Keep this receipt for your delivery." : "Show this receipt at pickup.",
+    pickupNote: partial ? "The balance is due at pickup." : r.order.fulfillment === "delivery" ? "Keep this receipt for your delivery." : "Show this receipt at pickup.",
   };
 }
 

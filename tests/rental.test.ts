@@ -129,3 +129,23 @@ test("evening-before pickup: collect the day before the event, return the day af
   assert.deepEqual(rentalSpan("2026-12-19", 1, false), { pickup: "2026-12-19", end: "2026-12-20" });
   assert.deepEqual(rentalSpan("2026-12-19", 2, true), { pickup: "2026-12-18", end: "2026-12-21" });
 });
+
+test("booking deposit: part of the price, not added on top", async () => {
+  const { priceRentalCart } = await import("../lib/rental.ts");
+  const r = priceRentalCart([{ productId: "p", quantity: 1 }], [{ ...projector, deposit: 50 }], 1, { p: 2 }, {}, "booking");
+  assert.ok(!("error" in r));
+  if ("error" in r) return;
+  assert.equal(r.subtotal, 90);
+  assert.equal(r.deposit, 50);
+  assert.equal(r.items.length, 1);
+});
+
+test("deposit wording and pickup map links", async () => {
+  const { depositNote, mapsLink } = await import("../lib/rental.ts");
+  assert.match(depositNote({ deposit: 50, deposit_kind: "booking", total: 210, currency: "BBD" }), /deposit to secure your date.*balance of BBD \$160\.00 is due at pickup/);
+  assert.match(depositNote({ deposit: 50, deposit_kind: "refundable" }), /refunded/);
+  assert.equal(depositNote({ deposit: 0 }), "");
+  assert.equal(mapsLink("13.159611, -59.620823"), "https://www.google.com/maps?q=13.159611,-59.620823");
+  assert.equal(mapsLink("https://maps.app.goo.gl/abc"), "https://maps.app.goo.gl/abc");
+  assert.equal(mapsLink("behind the church"), null);
+});

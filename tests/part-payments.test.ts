@@ -18,3 +18,10 @@ test("amounts that can't be right are refused", () => {
   assert.ok("error" in applyPayment(260, 100, "161"));
   assert.ok("error" in applyPayment(260, 260, "1"));
 });
+
+test("booking deposit is due first, then the balance", async () => {
+  const { dueNow } = await import("../lib/part-payments.ts");
+  assert.equal(dueNow({ total: 210, amount_paid: 0, deposit: 50, deposit_kind: "booking" }), 50);
+  assert.equal(dueNow({ total: 210, amount_paid: 50, deposit: 50, deposit_kind: "booking" }), 160);
+  assert.equal(dueNow({ total: 210, amount_paid: 0, deposit: 50, deposit_kind: "refundable" }), 210);
+});
