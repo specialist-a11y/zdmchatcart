@@ -8,7 +8,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ensurePaymentLink, sendFromBusiness, sendReceipt } from "@/lib/payments";
 import { receiptUrl } from "@/lib/receipt";
 import { sendReadyMessage } from "@/lib/followups";
-import { money, needsPrice, orderSummary, waLink } from "@/lib/order-text";
+import { money, needsPrice, orderSummary } from "@/lib/order-text";
+import { insideServiceWindow } from "@/lib/whatsapp";
 import { expandKits, overbooked, prettyDate, withRental } from "@/lib/rental";
 import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 
@@ -173,6 +174,27 @@ export default async function OrderPage({ params, searchParams }: {
     redirect(`${path}?msg=${encodeURIComponent(res.ok ? "Ready message sent on WhatsApp" : `Not sent: ${res.error}`)}`);
   }
 
+  /** Pickup or return reminder, sent from the business's WhatsApp number (Cloud API), logged in the Inbox. */
+  async function sendRentalReminder(f: FormData) {
+    "use server";
+    const { business } = await requireMembership(slug);
+    const admin = createAdminClient();
+    const kind = String(f.get("kind")) === "return" ? "return" : "pickup";
+    const { data: o } = await admin.from("orders").select("id, code, customer_id, rental_start, rental_end, pickup_time, customers(name, phone)")
+      .eq("business_id", business.id).eq("code", code).single<any>();
+    if (!o?.customers?.phone || !o.rental_start) redirect(`${path}?msg=${encodeURIComponent("No customer WhatsApp number on this order yet")}`);
+    // WhatsApp only allows a written message within 24 hours of the customer's last message.
+    const { data: last } = await admin.from("messages").select("created_at").eq("business_id", business.id).eq("customer_id", o.customer_id)
+      .eq("direction", "in").order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (!insideServiceWindow(last?.created_at)) redirect(`${path}?msg=${encodeURIComponent("Not sent: the customer hasn't messaged in the last 24 hours, so WhatsApp only allows approved templates. Ask them to message you, or call them.")}`);
+    const hi = `Hi${o.customers.name ? " " + String(o.customers.name).split(" ")[0] : ""}!`;
+    const body = kind === "pickup"
+      ? `${hi} A reminder for order ${o.code}: pick up is ${prettyDate(o.rental_start)}${o.pickup_time ? ` at ${o.pickup_time}` : ""}. See you then!`
+      : `${hi} A reminder for order ${o.code}: please return everything on ${prettyDate(o.rental_end)}. Thank you!`;
+    const res = await sendFromBusiness(admin, business.id, o.customers.phone, body, { customerId: o.customer_id, orderId: o.id, sentBy: "person" });
+    redirect(`${path}?msg=${encodeURIComponent(res.ok ? `${kind === "pickup" ? "Pickup" : "Return"} reminder sent on WhatsApp` : "Not sent: " + res.error)}`);
+  }
+
   async function rentalStep(f: FormData) {
     "use server";
     const { business } = await requireMembership(slug);
@@ -193,7 +215,6 @@ export default async function OrderPage({ params, searchParams }: {
   const { count: reused } = order.transfer_proof_hash
     ? await admin.from("orders").select("id", { count: "exact", head: true }).eq("transfer_proof_hash", order.transfer_proof_hash).neq("id", order.id)
     : { count: 0 };
-  const summary = withRental(orderSummary(order.code, order.order_items, order.total, order.currency), order);
   // Rental: check nobody else holds the same units for these dates.
   let clash: string[] = [];
   if (order.rental_start && !["cancelled", "abandoned"].includes(order.status)) {
@@ -210,7 +231,7 @@ export default async function OrderPage({ params, searchParams }: {
   return (
     <div className="stack" style={{ maxWidth: 760 }}>
       <PageHeader n={num("orders")} title={`Order ${order.code}`} actions={<span className={`badge ${order.status}`}>{order.status.replace(/_/g, " ")}</span>} />
-      {msg && <p className="ok">{msg}</p>}
+      {msg && <p className={/^(Not sent|No customer|Connect|Set the)/.test(msg) ? "error" : "ok"}>{msg}</p>}
       <div className="card stack">
         <div className="table-wrap">
           <table>
@@ -275,8 +296,8 @@ export default async function OrderPage({ params, searchParams }: {
             {!order.picked_up_at && order.paid_at && <form action={rentalStep}><input type="hidden" name="step" value="out" /><button className="btn">Picked up</button></form>}
             {order.picked_up_at && !order.returned_at && <form action={rentalStep}><input type="hidden" name="step" value="back" /><button className="btn">Returned</button></form>}
             {order.returned_at && Number(order.deposit) > 0 && !order.deposit_returned_at && <form action={rentalStep}><input type="hidden" name="step" value="deposit" /><button className="btn secondary">Deposit refunded</button></form>}
-            {customerPhone && !order.picked_up_at && <a className="btn secondary" target="_blank" rel="noreferrer" href={waLink(customerPhone, `Hi${order.customers?.name ? " " + order.customers.name : ""}! A reminder for order ${order.code}: pick up is ${prettyDate(order.rental_start)}${order.pickup_time ? ` at ${order.pickup_time}` : ""}. See you then!`)}>Pickup reminder</a>}
-            {customerPhone && order.picked_up_at && !order.returned_at && <a className="btn secondary" target="_blank" rel="noreferrer" href={waLink(customerPhone, `Hi${order.customers?.name ? " " + order.customers.name : ""}! A reminder for order ${order.code}: please return everything on ${prettyDate(order.rental_end)}. Thank you!`)}>Return reminder</a>}
+            {customerPhone && !order.picked_up_at && <form action={sendRentalReminder}><input type="hidden" name="kind" value="pickup" /><button className="btn secondary">Send pickup reminder</button></form>}
+            {customerPhone && order.picked_up_at && !order.returned_at && <form action={sendRentalReminder}><input type="hidden" name="kind" value="return" /><button className="btn secondary">Send return reminder</button></form>}
             <Link className="btn secondary" href={`/dashboard/${slug}/orders/rentals`}>Rental schedule</Link>
           </div>
         </div>
@@ -331,11 +352,8 @@ export default async function OrderPage({ params, searchParams }: {
           {!order.paid_at && !["cancelled", "fulfilled"].includes(order.status) && (
             <Link className="btn secondary" href={`${path}/qr`}>Show QR to pay by card</Link>
           )}
-          {customerPhone && (
-            <a className="btn secondary" target="_blank" rel="noreferrer"
-               href={waLink(customerPhone, `${summary}${order.payment_url ? `\n\nPay securely here: ${order.payment_url}` : ""}`)}>
-              Open chat with summary
-            </a>
+          {order.customer_id && (
+            <Link className="btn secondary" href={`/dashboard/${slug}/inbox?c=${order.customer_id}`}>Open chat in Inbox</Link>
           )}
         </div>
       </div>
