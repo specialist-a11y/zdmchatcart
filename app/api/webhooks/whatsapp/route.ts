@@ -8,6 +8,7 @@ import { rentalSettings } from "@/lib/rental-server";
 import { asksCatalog, asksLocation, isReturning, welcomeBack } from "@/lib/wa-intents";
 import { sendCatalog } from "@/lib/wa-catalog";
 import { bookingTurn } from "@/lib/wa-booking";
+import { pushToBusiness } from "@/lib/push";
 import { dueNow } from "@/lib/part-payments";
 import { ensurePaymentLink, getIntegration, sendFromBusiness } from "@/lib/payments";
 import { claimsPaid, findReference, proofPath, transferInstructions, wantsTransfer } from "@/lib/transfer";
@@ -161,6 +162,13 @@ export async function POST(req: Request) {
       business_id: businessId, customer_id: customerId, order_id: orderId,
       channel: "whatsapp", direction: "in", body: msg.media ? `[Photo]${msg.text ? " " + msg.text : ""}` : msg.text, external_id: msg.messageId,
     });
+    // Browser notification to the team (every plan): who wrote and what they said, opening their chat.
+    await pushToBusiness(admin, businessId, {
+      title: `WhatsApp from ${msg.name || `+${msg.from}`}`,
+      body: msg.media ? `📷 Photo${msg.text ? `: ${msg.text}` : ""}` : msg.text || "New message",
+      url: `/dashboard/${info?.slug ?? ""}/inbox?c=${customerId}`,
+      tag: `wa-${customerId}`,
+    }).catch(() => null);
 
     // Bank transfer: switch to transfer, or receive the screenshot / reference for the latest unpaid order.
     if (!reply && !code && transferOn && customerId) {

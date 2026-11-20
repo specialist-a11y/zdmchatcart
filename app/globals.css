@@ -269,3 +269,7 @@ table td.wrap, table th.wrap { white-space: normal; }
 .design-style input { position: absolute; opacity: 0; pointer-events: none; }
 .design-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 14px; }
 .design-checks label.row { font-weight: 500; min-height: 36px; }
+
+/* Browser notifications bar */
+.notify-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; border-radius: 12px; background: #e8f0ff; border: 1px solid #c6d8ff; font-size: 14px; }
+.notify-bar.is-on { background: #eaf7ef; border-color: #c4e8d1; }

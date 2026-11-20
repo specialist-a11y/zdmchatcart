@@ -6,6 +6,7 @@ import { Icon } from "@/components/Icon";
 import { getStaff } from "@/lib/staff";
 import { getEntitlements } from "@/lib/entitlements";
 import { sectionOpen } from "@/lib/plan-features";
+import NotifyBar from "@/components/NotifyBar";
 
 const initials = (s: string) => s.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
 
@@ -48,6 +49,7 @@ export default async function BusinessLayout({ children, params }: { children: R
     >
       {ent.status === "pending_payment" && <div className="notice" style={{ borderRadius: 12 }}>Welcome to ZDM ChatCart on {ent.planName}. Pay your setup invoice to start: ZDMINC then sets up your payments, WhatsApp and Instagram. <Link href={`${base}/billing`}>Pay now</Link></div>}
       {(ent.status === "paused" || ent.status === "cancelled") && <div className="notice" style={{ borderRadius: 12 }}>Your account is {ent.status}. <Link href={`${base}/billing`}>Plan and billing</Link></div>}
+      {!viewingAsStaff && <NotifyBar slug={slug} />}
       {viewingAsStaff && <div className="notice" style={{ borderRadius: 12 }}>You're viewing {business.name} as ZDMINC staff. Changes you make here are real. <Link href="/admin">Back to admin</Link></div>}
       {children}
     </CrmShell>
