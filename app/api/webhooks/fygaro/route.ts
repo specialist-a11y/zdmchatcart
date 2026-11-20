@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { verifyFygaroSignature, type FygaroHookPayload } from "@/lib/fygaro";
 import { sendReceipt } from "@/lib/payments";
+import { balanceDue } from "@/lib/part-payments";
 import { markInvoicePaid } from "@/lib/zdm-billing";
 import { sendPurchaseEvent } from "@/lib/meta";
 
@@ -59,15 +60,14 @@ export async function POST(req: Request) {
 
   const orderId = payload.customReference;
   if (!orderId) return NextResponse.json({ ok: true, note: "no customReference" });
-  const { data: order } = await admin
-    .from("orders")
-    .select("id, code, total, currency, customer_id, customers(phone)")
-    .eq("id", orderId)
-    .eq("business_id", integ.business_id)
-    .maybeSingle<any>();
+  const sel = "id, code, total, currency, customer_id, customers(phone)";
+  const find = (cols: string) => admin.from("orders").select(cols).eq("id", orderId).eq("business_id", integ.business_id).maybeSingle<any>();
+  let { data: order, error: selErr } = await find(`${sel}, amount_paid`);
+  if (selErr) ({ data: order } = await find(sel));
   if (!order) return NextResponse.json({ ok: true, note: "order not found" });
 
-  if (Math.round(Number(payload.amount) * 100) < Math.round(Number(order.total) * 100)) {
+  // After a part payment (0026) the card link is for the balance, so check against that.
+  if (Math.round(Number(payload.amount) * 100) < Math.round(balanceDue(order.total, order.amount_paid) * 100)) {
     await admin.from("orders").update({ note: `Fygaro paid ${payload.amount} ${payload.currency}, less than total. Check manually.` }).eq("id", order.id);
     return NextResponse.json({ ok: true, note: "amount mismatch" });
   }

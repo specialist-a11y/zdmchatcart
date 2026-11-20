@@ -10,6 +10,7 @@ import { receiptUrl } from "@/lib/receipt";
 import { sendReadyMessage } from "@/lib/followups";
 import { money, needsPrice, orderSummary } from "@/lib/order-text";
 import { insideServiceWindow } from "@/lib/whatsapp";
+import { applyPayment, balanceDue, METHOD_LABEL, type PaymentMethod } from "@/lib/part-payments";
 import { expandKits, overbooked, prettyDate, withRental } from "@/lib/rental";
 import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 
@@ -21,7 +22,7 @@ export default async function OrderPage({ params, searchParams }: {
 }) {
   const { slug, code } = await params;
   const { msg } = await searchParams;
-  const { supabase, business } = await requireMembership(slug);
+  const { supabase, business, role } = await requireMembership(slug);
   const { data: order } = await supabase
     .from("orders")
     .select("*, customers(id, name, phone), order_items(id, product_id, name, unit_price, quantity)")
@@ -195,6 +196,33 @@ export default async function OrderPage({ params, searchParams }: {
     redirect(`${path}?msg=${encodeURIComponent(res.ok ? `${kind === "pickup" ? "Pickup" : "Return"} reminder sent on WhatsApp` : "Not sent: " + res.error)}`);
   }
 
+  /** Owner records money that actually arrived (1st Pay, bank or cash). Part payments keep a balance; the last one marks the order paid. */
+  async function recordPayment(f: FormData) {
+    "use server";
+    const { business, role, user } = await requireMembership(slug);
+    if (role === "staff") redirect(`${path}?msg=${encodeURIComponent("Only owners and admins can record payments")}#payments`);
+    const admin = createAdminClient();
+    const { data: o, error: oErr } = await admin.from("orders").select("id, total, currency, status, paid_at, amount_paid, transfer_reference")
+      .eq("business_id", business.id).eq("code", code).single<any>();
+    if (oErr) redirect(`${path}?msg=${encodeURIComponent("Couldn't record it. Run migration 0026_part_payments.sql first.")}#payments`);
+    if (!o || o.paid_at || ["cancelled"].includes(o.status)) redirect(`${path}?msg=${encodeURIComponent("This order is already paid in full")}#payments`);
+    const r = applyPayment(o.total, o.amount_paid, String(f.get("amount") ?? ""));
+    if ("error" in r) redirect(`${path}?msg=${encodeURIComponent(`Not recorded: ${r.error}`)}#payments`);
+    const method = (["transfer", "cash"].includes(String(f.get("method"))) ? String(f.get("method")) : "transfer") as PaymentMethod;
+    const reference = String(f.get("reference") ?? "").trim().slice(0, 80) || null;
+    const { error } = await admin.from("order_payments").insert({ business_id: business.id, order_id: o.id, amount: r.amount, method, reference, recorded_by: user?.id ?? null });
+    if (error) redirect(`${path}?msg=${encodeURIComponent("Couldn't record it. Run migration 0026_part_payments.sql first.")}#payments`);
+    // A new card link must be for the balance, so the old one is cleared.
+    await admin.from("orders").update({
+      amount_paid: r.paid, payment_url: null,
+      ...(r.full ? {} : { status: "awaiting_payment", transfer_submitted_at: null }),
+    }).eq("id", o.id);
+    if (r.full) await admin.rpc("mark_order_paid", { p_order: o.id, p_txn: method === "cash" ? "manual" : `transfer:${reference ?? o.transfer_reference ?? "confirmed"}` });
+    const sent = f.get("send") === "on" ? await sendReceipt(admin, o.id).catch(() => ({ ok: false })) : null;
+    const what = r.full ? `Paid in full.` : `Recorded ${money(r.amount, o.currency)}. Balance ${money(r.balance, o.currency)}.`;
+    redirect(`${path}?msg=${encodeURIComponent(`${what}${sent ? (sent.ok ? " Receipt sent on WhatsApp." : " Receipt not sent on WhatsApp.") : ""}`)}#payments`);
+  }
+
   async function rentalStep(f: FormData) {
     "use server";
     const { business } = await requireMembership(slug);
@@ -206,6 +234,10 @@ export default async function OrderPage({ params, searchParams }: {
   }
 
   const customerPhone = order.customers?.phone as string | undefined;
+  const paidSoFar = order.paid_at ? Number(order.total) : Number(order.amount_paid ?? 0);
+  const balance = balanceDue(order.total, paidSoFar);
+  const { data: payments } = await createAdminClient().from("order_payments").select("id, amount, method, reference, created_at")
+    .eq("order_id", order.id).order("created_at").then((r) => r, () => ({ data: null }));
   const toPrice = needsPrice(order.order_items) && !["paid", "fulfilled", "cancelled"].includes(order.status);
   const isTransfer = order.payment_method === "transfer";
   const admin = createAdminClient();
@@ -231,7 +263,7 @@ export default async function OrderPage({ params, searchParams }: {
   return (
     <div className="stack" style={{ maxWidth: 760 }}>
       <PageHeader n={num("orders")} title={`Order ${order.code}`} actions={<span className={`badge ${order.status}`}>{order.status.replace(/_/g, " ")}</span>} />
-      {msg && <p className={/^(Not sent|No customer|Connect|Set the)/.test(msg) ? "error" : "ok"}>{msg}</p>}
+      {msg && <p className={/^(Not sent|Not recorded|Couldn|Only owners|No customer|Connect|Set the)/.test(msg) ? "error" : "ok"}>{msg}</p>}
       <div className="card stack">
         <div className="table-wrap">
           <table>
@@ -325,7 +357,41 @@ export default async function OrderPage({ params, searchParams }: {
                 <form action={confirmTransfer}><button className="btn blue">Money received: confirm and send receipt</button></form>
                 <form action={rejectTransfer}><button className="btn secondary">Not received</button></form>
               </div>
+              <p className="muted" style={{ margin: 0 }}>Only part of it arrived? Record the amount under <a href="#payments">Payments received</a> below. The receipt shows what's been paid and the balance.</p>
             </>
+          )}
+        </div>
+      )}
+
+      {Number(order.total) > 0 && order.status !== "cancelled" && !toPrice && (!order.paid_at || (payments ?? []).length > 0) && (
+        <div id="payments" className="card stack">
+          <div className="row" style={{ justifyContent: "space-between" }}>
+            <h2 style={{ fontSize: 22 }}>Payments received</h2>
+            <span className={`badge ${balance === 0 ? "paid" : paidSoFar > 0 ? "high" : ""}`}>{balance === 0 ? "Paid in full" : paidSoFar > 0 ? "Part paid" : "Nothing yet"}</span>
+          </div>
+          <div className="kpis" style={{ gridTemplateColumns: "repeat(3, minmax(0, 1fr))" }}>
+            <div className="kpi"><small>Total</small><b>{money(order.total, order.currency)}</b></div>
+            <div className="kpi"><small>Paid so far</small><b>{money(paidSoFar, order.currency)}</b></div>
+            <div className="kpi"><small>Balance</small><b>{money(balance, order.currency)}</b></div>
+          </div>
+          {(payments ?? []).map((p: any) => (
+            <div key={p.id} className="row" style={{ justifyContent: "space-between", fontSize: 14, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+              <span>{new Date(p.created_at).toLocaleString("en-GB", { timeZone: "America/Barbados", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</span>
+              <span>{METHOD_LABEL[p.method as PaymentMethod] ?? p.method}{p.reference ? ` · ${p.reference}` : ""}</span>
+              <b>{money(p.amount, order.currency)}</b>
+            </div>
+          ))}
+          {balance > 0 && role !== "staff" && (
+            <form action={recordPayment} className="stack" style={{ gap: 8 }}>
+              <p className="muted" style={{ margin: 0 }}>Check your bank or 1st Pay first. Enter only the money that is in your account.</p>
+              <div className="row" style={{ gap: 8, alignItems: "flex-end" }}>
+                <label style={{ flex: "1 1 140px" }}>Amount received ({order.currency})<input name="amount" inputMode="decimal" defaultValue={balance.toFixed(2)} required /></label>
+                <label style={{ flex: "1 1 180px" }}>How they paid<select name="method" defaultValue="transfer"><option value="transfer">1st Pay / bank transfer</option><option value="cash">Cash</option></select></label>
+                <label style={{ flex: "1 1 160px" }}>Reference (optional)<input name="reference" maxLength={80} defaultValue={order.transfer_reference ?? ""} /></label>
+              </div>
+              {customerPhone && <label className="row" style={{ gap: 8, fontWeight: 500 }}><input type="checkbox" name="send" defaultChecked style={{ width: 20, height: 20 }} />Send the receipt on WhatsApp</label>}
+              <button className="btn blue" style={{ alignSelf: "flex-start" }}>Record payment</button>
+            </form>
           )}
         </div>
       )}

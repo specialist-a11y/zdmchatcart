@@ -16,13 +16,18 @@ export function checkReceiptToken(orderId: string, token: string) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-export function receiptUrl(orderId: string) {
+/** `version` changes the link after each part payment, so WhatsApp fetches the new receipt, not a cached one. */
+export function receiptUrl(orderId: string, version?: string | number) {
   const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
-  return `${site}/api/receipts/${orderId}?t=${receiptToken(orderId)}`;
+  return `${site}/api/receipts/${orderId}?t=${receiptToken(orderId)}${version != null ? `&v=${version}` : ""}`;
 }
 
 export type ReceiptInput = {
   business: { name: string; address?: string | null };
+  /** Payments recorded so far (part payments). Leave out for an order paid in one go. */
+  amountPaid?: number | string | null;
+  /** How the last part payment came in, e.g. "Cash". */
+  lastMethod?: string | null;
   order: { code: string; total: number | string; currency: string; fulfillment?: string | null; created_at: string; paid_at?: string | null; fygaro_transaction_id?: string | null };
   items: { name: string; unit_price: number | string; quantity: number }[];
   customerName?: string | null;
@@ -45,6 +50,9 @@ export function receiptModel(r: ReceiptInput) {
   const total = Number(r.order.total);
   const vat = r.vatRate ? total - total / (1 + r.vatRate) : null;
   const txn = r.order.fygaro_transaction_id;
+  // Part payments: paid in full once the order is marked paid, otherwise what has been recorded so far.
+  const paidCents = r.order.paid_at ? Math.round(total * 100) : Math.min(Math.round(total * 100), Math.round(Number(r.amountPaid ?? 0) * 100));
+  const partial = !r.order.paid_at && paidCents > 0;
   const cash = txn === "manual";
   const transfer = !!txn && txn.startsWith("transfer:");
   const first = (r.customerName ?? "").trim().split(/\s+/)[0] || null;
@@ -63,10 +71,13 @@ export function receiptModel(r: ReceiptInput) {
     vat: vat == null ? null : { rate: `${+(r.vatRate! * 100).toFixed(2)}%`, amount: two(vat) },
     total: two(total),
     currency: r.order.currency,
-    payment: cash ? "Cash / in person" : transfer ? "Bank transfer" : "Card link",
+    payment: partial ? (r.lastMethod ?? "Part payment") : cash ? "Cash / in person" : transfer ? "Bank transfer" : "Card link",
+    stamp: partial ? "PART PAID" : "PAID",
+    paidSoFar: partial ? two(paidCents / 100) : null,
+    balance: partial ? two(total - paidCents / 100) : null,
     ref: !txn || cash ? null : transfer ? (txn.slice(9) === "confirmed" ? null : txn.slice(9)) : txn.length > 12 ? `${txn.slice(0, 4)}...${txn.slice(-3)}` : txn,
     thanks: first ? `Thank you, ${first}!` : "Thank you!",
-    pickupNote: r.order.fulfillment === "delivery" ? "Keep this receipt for your delivery." : "Show this receipt at pickup.",
+    pickupNote: partial ? "Please pay the balance before pickup." : r.order.fulfillment === "delivery" ? "Keep this receipt for your delivery." : "Show this receipt at pickup.",
   };
 }
 
