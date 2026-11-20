@@ -87,7 +87,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [shown, setShown] = useState(0); // bumps when checkout opens, so time slots are worked out in the browser
   const [photo, setPhoto] = useState(0);
   const [activeCat, setActiveCat] = useState<string>("");
-  const [payBy, setPayBy] = useState<"card" | "transfer">("card");
+  const [payBy, setPayBy] = useState<"card" | "transfer">(cardPay || !business.bank_transfer_enabled ? "card" : "transfer");
   // Rental mode: shoppers pick dates first, then see what's free for those dates.
   const hasRentals = products.some((p) => p.rental);
   const earliest = addDays(today ?? new Date().toISOString().slice(0, 10), Math.max(0, business.rental_lead_days ?? 0));
@@ -680,11 +680,13 @@ export default function ShopClient({ business, products, attribution, previewTem
               {business.bank_transfer_enabled && (
                 <div className="stack" style={{ gap: 6 }}>
                   <span className="s-small">How would you like to pay?</span>
-                  <div className="s-toggle" role="group" aria-label="How to pay">
-                    <button type="button" aria-pressed={payBy === "card"} onClick={() => setPayBy("card")}>Card link</button>
-                    <button type="button" aria-pressed={payBy === "transfer"} onClick={() => setPayBy("transfer")}>Bank transfer</button>
-                  </div>
-                  {payBy === "transfer" && <span style={{ fontSize: 14, color: "var(--muted)" }}>1st Pay or any bank. We send our account details on WhatsApp, with your order code as the reference.</span>}
+                  {cardPay ? (
+                    <div className="s-toggle" role="group" aria-label="How to pay">
+                      <button type="button" aria-pressed={payBy === "card"} onClick={() => setPayBy("card")}>Card</button>
+                      <button type="button" aria-pressed={payBy === "transfer"} onClick={() => setPayBy("transfer")}>1st Pay or bank transfer</button>
+                    </div>
+                  ) : <b style={{ fontSize: 15 }}>1st Pay or bank transfer</b>}
+                  {payBy === "transfer" && <span style={{ fontSize: 14, color: "var(--muted)" }}>Pay with the 1st Pay app or from any bank. We send our details on WhatsApp, with your order code as the reference.</span>}
                 </div>
               )}
 
