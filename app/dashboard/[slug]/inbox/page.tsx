@@ -9,6 +9,7 @@ import { PageHeader } from "@/components/CrmShell";
 import { num } from "@/lib/crm-nav";
 import { back as goBack, requireEditor, str } from "@/lib/crm-actions";
 import ReplyBox from "./ReplyBox";
+import ChatLive from "./ChatLive";
 
 const STARTERS = [
   { title: "Shop link", body: "Hi {name}! You can see everything and order here: {shop_link}" },
@@ -98,7 +99,7 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
           <Link key={k} href={`?f=${k}`} aria-current={filter === k ? "true" : undefined}>{l}</Link>
         ))}
       </nav>
-      <div className="chat">
+      <div className={`chat${sp.c ? " has-open" : ""}`}>
         <div className="card list" style={{ padding: 0, overflow: "hidden" }}>
           {list.map((m) => (
             <Link key={m.customer_id} className="item" href={`?c=${m.customer_id}${filter !== "all" ? `&f=${filter}` : ""}`} aria-current={m.customer_id === cid ? "true" : undefined}>
@@ -110,24 +111,38 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
           {!list.length && <p className="muted" style={{ padding: 14 }}>{filter === "all" ? "No chats yet. When customers message your WhatsApp number or Instagram they show up here." : "Nothing here."}</p>}
         </div>
         {cid ? (
-          <div className="stack" style={{ gap: 12 }}>
-            <div className="card row" style={{ justifyContent: "space-between" }}>
-              <div style={{ minWidth: 0 }}><b style={{ fontSize: 17 }}>{name(cur)}</b> {tag(channel)}<br /><span className="muted" style={{ fontSize: 13 }}>{cur?.phone ? `+${cur.phone} · ` : ""}<span className="badge" style={{ fontSize: 11 }}>{cur?.stage}</span> · {cur?.order_count ?? 0} orders · {Number(cur?.total_spent ?? 0) ? `${money(cur.total_spent, business.currency)} spent` : "no purchases yet"}</span></div>
-              <Link className="btn secondary small" href={`/dashboard/${slug}/customers/${cid}`}>Profile</Link>
-            </div>
-            <div className="card" style={{ background: "#efe9df", display: "flex", flexDirection: "column", gap: 8, maxHeight: "55vh", overflowY: "auto" }}>
-              {(thread ?? []).map((m) => <div key={m.id} className={`bubble ${m.direction}`}>{m.body}<small>{m.channel === "instagram" ? "Instagram · " : ""}{when(m.created_at)}</small></div>)}
-            </div>
-            <form action={reply} className="card stack" style={{ gap: 10 }}>
-              <input type="hidden" name="slug" value={slug} /><input type="hidden" name="customer_id" value={cid} /><input type="hidden" name="channel" value={channel} />
-              <ReplyBox replies={quick ?? []} placeholder={`Reply to ${name(cur)} on ${channel === "instagram" ? "Instagram" : "WhatsApp"}`} vars={{ name: cur?.name?.split(" ")[0] ?? "", shop_link: `${site}/s/${slug}` }} />
-              <div className="row" style={{ justifyContent: "space-between" }}>
-                <span className="muted" style={{ fontSize: 13, flex: "1 1 220px" }}>{open ? "They wrote in the last 24 hours, so your reply sends as written."
+          <div className="stack thread" style={{ gap: 12 }}>
+            <div className="wa-window">
+              <div className="wa-head">
+                <Link className="wa-back" href={`?${filter !== "all" ? `f=${filter}` : ""}`} aria-label="All chats">←</Link>
+                <span className="wa-avatar" aria-hidden="true">{name(cur).replace(/^[@+]/, "").slice(0, 1).toUpperCase()}</span>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <b className="wa-name">{name(cur)}</b>
+                  <span className="wa-sub">{cur?.phone ? `+${cur.phone} · ` : ""}{channel === "instagram" ? "Instagram" : "WhatsApp"} · {cur?.order_count ?? 0} orders{Number(cur?.total_spent ?? 0) ? ` · ${money(cur.total_spent, business.currency)} spent` : ""}</span>
+                </div>
+                <Link className="wa-profile" href={`/dashboard/${slug}/customers/${cid}`}>Profile</Link>
+              </div>
+              <ChatLive count={(thread ?? []).length}>
+                {(thread ?? []).map((m, i, arr) => {
+                  const day = new Date(m.created_at).toLocaleDateString("en-GB", { timeZone: "America/Barbados", weekday: "short", day: "numeric", month: "short" });
+                  const prev = i ? new Date(arr[i - 1].created_at).toLocaleDateString("en-GB", { timeZone: "America/Barbados", weekday: "short", day: "numeric", month: "short" }) : "";
+                  return (
+                    <div key={m.id} style={{ display: "contents" }}>
+                      {day !== prev && <span className="wa-day">{day}</span>}
+                      <div className={`bubble ${m.direction}`}>{m.body}<small>{m.channel === "instagram" ? "Instagram · " : ""}{new Date(m.created_at).toLocaleTimeString("en-GB", { timeZone: "America/Barbados", hour: "2-digit", minute: "2-digit" })}</small></div>
+                    </div>
+                  );
+                })}
+                {!(thread ?? []).length && <span className="wa-day">No messages yet</span>}
+              </ChatLive>
+              <form action={reply} className="wa-compose">
+                <input type="hidden" name="slug" value={slug} /><input type="hidden" name="customer_id" value={cid} /><input type="hidden" name="channel" value={channel} />
+                <ReplyBox replies={quick ?? []} placeholder="Type a message" vars={{ name: cur?.name?.split(" ")[0] ?? "", shop_link: `${site}/s/${slug}` }} />
+                <span className="wa-note">{open ? "They wrote in the last 24 hours, so your reply sends as written."
                   : channel === "instagram" ? "More than 24 hours since they wrote. Instagram may not deliver this; reply from the Instagram app instead."
                   : "More than 24 hours since they wrote. WhatsApp may block a free-text reply. Approved templates are on the WhatsApp page."}</span>
-                <button className="btn blue">Send</button>
-              </div>
-            </form>
+              </form>
+            </div>
 
             <div className="cols">
               <section className="card stack" style={{ gap: 8 }}>
@@ -170,7 +185,7 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
               </details>
             </div>
           </div>
-        ) : <div className="soon"><b>Pick a chat</b><p className="muted" style={{ margin: 0 }}>Conversations appear here as customers message you.</p></div>}
+        ) : <div className="soon thread"><b>Pick a chat</b><p className="muted" style={{ margin: 0 }}>Conversations appear here as customers message you.</p></div>}
       </div>
 
       {role !== "staff" && (

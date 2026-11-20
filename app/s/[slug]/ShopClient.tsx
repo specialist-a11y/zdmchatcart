@@ -1,4 +1,5 @@
 "use client";
+import { shopperPhone } from "@/lib/shopper-phone";
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { money } from "@/lib/order-text";
@@ -49,8 +50,10 @@ function loadPixel(id: string) {
 
 const handle = (s: string) => s.replace(/^@/, "").replace(/^https?:\/\/(www\.)?(instagram|facebook)\.com\//, "").replace(/\/$/, "");
 
-export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme, basePath, initialFocus, today, cartRecovery = true }: {
+export default function ShopClient({ business, products, attribution, previewTemplate, openNow, best = [], previewTheme, basePath, initialFocus, today, cartRecovery = true, cardPay = false }: {
   cartRecovery?: boolean;
+  /** Fygaro is connected, so shoppers can pay by card right away instead of going to WhatsApp first. */
+  cardPay?: boolean;
   today?: string;
   basePath?: string;
   initialFocus?: string | null;
@@ -72,7 +75,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   const [phone, setPhone] = useState("");
   const [optIn, setOptIn] = useState(false);
   const [marketing, setMarketing] = useState(false);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<false | "pay" | "wa">(false);
   const [error, setError] = useState("");
   // Pickup or delivery, zone, time slot and address (migration 0016).
   const zones = useMemo(() => readZones(business.delivery_zones), [business.delivery_zones]);
@@ -258,7 +261,7 @@ export default function ShopClient({ business, products, attribution, previewTem
   }
   const pickFor = (p: { id: string; opts: Variant[] }) => picks[p.id] ?? p.opts.find((v) => v.available)?.id ?? null;
 
-  async function checkout() {
+  async function checkout(payNow = false) {
     if (cartHasRental && !free) return setError("Pick your rental dates first");
     if (cartHasRental && times.length && !pickupTime) return setError("Choose a pickup time");
     if (cartHasRental && business.rental_agreement_url && !agreed) return setError("Please accept the rental agreement");
@@ -266,7 +269,9 @@ export default function ShopClient({ business, products, attribution, previewTem
     if (mode === "delivery" && zones.length && !zone) return setError("Choose your delivery area");
     if (mode === "delivery" && !address.trim()) return setError("Add the delivery address");
     if (slots.length && !slot) return setError(`Choose a ${mode === "delivery" ? "delivery" : hasGoods ? "pickup" : ""} time`.replace("  ", " "));
-    setBusy(true);
+    if (!phone.trim()) return setError("Add your WhatsApp number so we can send your receipt");
+    if (!shopperPhone(phone)) return setError("Check your WhatsApp number. Include the area code, like 246 555 1234");
+    setBusy(payNow ? "pay" : "wa");
     setError("");
     try {
       const res = await fetch("/api/orders", {
@@ -280,6 +285,7 @@ export default function ShopClient({ business, products, attribution, previewTem
           optIn,
           marketing,
           paymentMethod: business.bank_transfer_enabled ? payBy : undefined,
+          payNow: payNow || undefined,
           rental: cartHasRental ? { start, days, pickupTime: pickupTime || undefined, agreed } : undefined,
           attribution: ref ?? undefined,
           fbc: consent === "yes" ? fbc ?? undefined : undefined,
@@ -293,12 +299,14 @@ export default function ShopClient({ business, products, attribution, previewTem
       if (!res.ok) throw new Error(json.error ?? "Something went wrong");
       setCart({});
       track("InitiateCheckout", { value: grand, num_items: count, content_ids: lines.map((l) => l.p.id), content_type: "product" });
-      window.location.href = json.whatsappUrl;
+      window.location.href = json.payUrl ?? json.whatsappUrl;
     } catch (e: any) {
       setError(e.message);
       setBusy(false);
     }
   }
+  // Pay by card now: Fygaro connected, paying by card, and every price is known.
+  const canPayNow = cardPay && !onRequest && !(business.bank_transfer_enabled && payBy === "transfer");
 
   const priceText = (p: Product, v?: Variant | null) => {
     const { amount, from } = v ? { amount: v.price, from: false } : displayPrice(p);
@@ -682,7 +690,8 @@ export default function ShopClient({ business, products, attribution, previewTem
 
               <div className="s-fields">
                 <label>Your name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" /></label>
-                <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="Optional" /></label>
+                <label>WhatsApp number<input value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" inputMode="tel" autoComplete="tel" placeholder="e.g. 246 555 1234" required aria-describedby="s-phone-hint" />
+                  <span id="s-phone-hint" style={{ fontSize: 13, color: "var(--muted)", fontWeight: 400 }}>Include your area code. Your receipt is sent here.</span></label>
               </div>
               {cartRecovery && (
                 <label className="s-check">
@@ -695,14 +704,30 @@ export default function ShopClient({ business, products, attribution, previewTem
                 Tell me about {business.name}&apos;s specials on WhatsApp
               </label>
               <div className="s-sheethead" style={{ fontSize: 18 }}><b>Total</b><b>{money(grand, business.currency)}{onRequest ? " + quote" : ""}</b></div>
-              <ol className="s-how" aria-label="How ordering works">
-                <li>Your order code is typed for you in WhatsApp. Just press send.</li>
-                <li>{payBy === "transfer" && business.bank_transfer_enabled ? "We reply with our bank details. Send the transfer, then the screenshot." : `We reply with a secure card payment link${onRequest ? " once the price is confirmed" : ""}.`}</li>
-                <li>Your receipt arrives on WhatsApp.</li>
-              </ol>
-              <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={busy || !business.whatsapp_number || !rentalReady} onClick={checkout}>
-                {WA_ICON}{busy ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp" : "Order on WhatsApp"}
-              </button>
+              {canPayNow ? (
+                <>
+                  <button className="s-btn" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(true)}>
+                    {busy === "pay" ? "Opening secure payment..." : `Pay ${money(grand, business.currency)} now by card`}
+                  </button>
+                  <span style={{ fontSize: 14, color: "var(--muted)", textAlign: "center" }}>Secure card payment by Fygaro. Your receipt comes on WhatsApp.</span>
+                  <span className="s-or" style={{ textAlign: "center", fontSize: 14, color: "var(--muted)" }}>or</span>
+                  <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(false)}>
+                    {WA_ICON}{busy === "wa" ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp first" : "Order on WhatsApp first"}
+                  </button>
+                  <span style={{ fontSize: 14, color: "var(--muted)", textAlign: "center" }}>Ask a question before you pay. We reply with your order and a payment link.</span>
+                </>
+              ) : (
+                <>
+                  <ol className="s-how" aria-label="How ordering works">
+                    <li>Your order code is typed for you in WhatsApp. Just press send.</li>
+                    <li>{payBy === "transfer" && business.bank_transfer_enabled ? "We reply with our bank details. Send the transfer, then the screenshot." : `We reply with a secure card payment link${onRequest ? " once the price is confirmed" : ""}.`}</li>
+                    <li>Your receipt arrives on WhatsApp.</li>
+                  </ol>
+                  <button className="s-btn s-wa" style={{ minHeight: 52, fontSize: 17 }} disabled={!!busy || !business.whatsapp_number || !rentalReady} onClick={() => checkout(false)}>
+                    {WA_ICON}{busy ? "Opening WhatsApp..." : cartHasRental ? "Book on WhatsApp" : "Order on WhatsApp"}
+                  </button>
+                </>
+              )}
               {!business.whatsapp_number && <p style={{ margin: 0 }}>This business has not added its WhatsApp number yet.</p>}
               {error && <p className="s-err" role="alert">{error}</p>}
             </div>

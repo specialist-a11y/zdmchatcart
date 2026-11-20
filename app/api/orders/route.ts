@@ -7,6 +7,8 @@ import { addDays, availability, expandKits, kitFree, overbooked, pickupOptions, 
 import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 import { todayIn } from "@/lib/billing";
 import { upsertCustomer } from "@/lib/customers";
+import { shopperPhone } from "@/lib/shopper-phone";
+import { ensurePaymentLink } from "@/lib/payments";
 import { template } from "@/lib/catalog";
 import { cleanHours } from "@/lib/hours";
 import { readZones, sharedReadyDays, slotOptions } from "@/lib/shop-front";
@@ -25,6 +27,8 @@ const Body = z.object({
   slot: z.string().datetime().optional(),
   address: z.string().trim().max(300).optional(),
   paymentMethod: z.enum(["card", "transfer"]).optional(),
+  /** Pay by card straight away on Fygaro instead of going to WhatsApp first. */
+  payNow: z.boolean().optional(),
   rental: z.object({
     start: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     days: z.number().int().min(1).max(30),
@@ -113,10 +117,12 @@ export async function POST(req: Request) {
   }
   const total = Math.round((priced.subtotal + fee) * 100) / 100;
 
-  // Optional: shopper gave their number, so we can link the order to a CRM record now.
+  // The shopper's WhatsApp number links the order to a CRM record and is where the receipt goes.
   let customerId: string | null = null;
-  const phone = body.phone?.replace(/\D/g, "");
-  if (phone && phone.length >= 7) {
+  const phone = shopperPhone(body.phone);
+  if (body.phone?.trim() && !phone) return NextResponse.json({ error: "Check your WhatsApp number. Include the area code, like 246 555 1234." }, { status: 400 });
+  if (!phone && body.payNow) return NextResponse.json({ error: "Add your WhatsApp number so we can send your receipt." }, { status: 400 });
+  if (phone) {
     customerId = await upsertCustomer(admin, business.id, phone, { name: body.name, optIn: body.optIn, marketing: body.marketing });
     if (customerId) await admin.from("customers").update({ stage: "ordered" }).eq("id", customerId).eq("stage", "new");
   }
@@ -173,8 +179,12 @@ export async function POST(req: Request) {
     }
   }
 
+  // Pay now: straight to the Fygaro card page. Falls back to WhatsApp if there's no link (price to confirm, or Fygaro not set up).
+  const payUrl = body.payNow && !transfer ? await ensurePaymentLink(admin, order.id).catch(() => null) : null;
+
   return NextResponse.json({
     code,
+    ...(payUrl ? { payUrl } : {}),
     whatsappUrl: waLink(business.whatsapp_number, rental ? `Hi! I'd like to book order ${code}` : `Hi! I'd like to place order ${code}`),
   });
 }

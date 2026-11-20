@@ -38,7 +38,13 @@ export const loadShop = cache(async (slug: string) => {
   const { getEntitlements } = await import("@/lib/entitlements");
   const { has } = await import("@/lib/plan-features");
   const ent = await getEntitlements(business.id).catch(() => null);
-  const features = { cartRecovery: !ent || has(ent, "cart_recovery") };
+  // Card payment straight from the shop needs Fygaro connected (checked with the server key; integrations are private).
+  let cardPay = false;
+  if (hasServiceRoleKey()) {
+    const { data: fy } = await createAdminClient().from("integrations").select("status, config").eq("business_id", business.id).eq("provider", "fygaro").maybeSingle();
+    cardPay = fy?.status === "connected" && !!(fy.config as any)?.button_url;
+  }
+  const features = { cartRecovery: !ent || has(ent, "cart_recovery"), cardPay };
   return { business, products: products ?? [], best, domain: live, urls: shopUrls(slug, live), features };
 });
 

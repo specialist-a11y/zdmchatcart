@@ -25,7 +25,13 @@ export default function ReplyBox({ replies, placeholder, vars }: { replies: Quic
           ))}
         </div>
       )}
-      <textarea ref={ref} name="body" rows={3} placeholder={placeholder} required />
+      <div className="wa-input">
+        <textarea ref={ref} name="body" rows={1} placeholder={placeholder} required aria-label={placeholder}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && window.matchMedia("(min-width: 901px)").matches) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} />
+        <button className="wa-send" aria-label="Send">
+          <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M3.4 20.4 21 12 3.4 3.6 3.4 10l12.6 2-12.6 2z" /></svg>
+        </button>
+      </div>
     </>
   );
 }
