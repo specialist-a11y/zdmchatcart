@@ -22,7 +22,8 @@ export function TicketAttachments({ items, urls }: { items?: Att[] | null; urls:
           <video key={a.path} src={url} controls playsInline preload="metadata" style={{ width: 200, maxWidth: "100%", borderRadius: 10, background: "#000" }} />
         ) : (
           <a key={a.path} href={url} target="_blank" rel="noreferrer" title={a.name}>
-            <img src={url} alt={a.name} style={{ width: 120, height: 90, objectFit: "cover", borderRadius: 10, border: "1px solid var(--line)" }} />
+            {/* Website concepts show large; screenshots as thumbnails. */}
+            <img src={url} alt={a.name} style={a.name.includes("concept") ? { width: 480, maxWidth: "100%", height: "auto", borderRadius: 10, border: "1px solid var(--line)" } : { width: 120, height: 90, objectFit: "cover", borderRadius: 10, border: "1px solid var(--line)" }} />
           </a>
         );
       })}

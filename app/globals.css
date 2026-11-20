@@ -261,3 +261,11 @@ table td.wrap, table th.wrap { white-space: normal; }
   .chat:not(.has-open) > .thread { display: none; }
   .wa-msgs { height: 62vh; }
 }
+
+/* Website design request */
+.design-styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; }
+.design-style { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 2px solid var(--line); cursor: pointer; min-height: 88px; font-weight: 500; }
+.design-style:has(input:checked) { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(61, 139, 255, 0.25); }
+.design-style input { position: absolute; opacity: 0; pointer-events: none; }
+.design-checks { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 6px 14px; }
+.design-checks label.row { font-weight: 500; min-height: 36px; }

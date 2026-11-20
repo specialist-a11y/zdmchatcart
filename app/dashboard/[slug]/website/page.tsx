@@ -150,6 +150,14 @@ export default async function WebsitePage({ params, searchParams }: { params: Pr
         </section>
       </div>
 
+      <section className="card row" style={{ justifyContent: "space-between", background: "var(--ink)", color: "#fff" }}>
+        <div style={{ flex: "1 1 320px" }}>
+          <h2 style={{ color: "#fff" }}>Want a website designed for you?</h2>
+          <span style={{ color: "#c4ccc8" }}>Answer a few questions and we draw a first concept of your homepage straight away. ZDMINC then sends you a quote.</span>
+        </div>
+        <Link className="btn blue" href={`${path}/design`}>Request a design</Link>
+      </section>
+
       <TemplatePicker slug={slug} current={(look as any)?.site_template ?? "classic"} heroUrl={(look as any)?.hero_image_url ?? null} canEdit={canEdit}
         businessName={business.name} tagline={business.tagline}
         copy={{ headline: (heroCopy as any)?.hero_headline ?? "", subheadline: (heroCopy as any)?.hero_subheadline ?? "", text: (heroCopy as any)?.hero_text ?? "" }} />
