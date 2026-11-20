@@ -39,8 +39,11 @@ export default async function CustomersPage({ params, searchParams }: {
     return q;
   };
   const base = "id, name, phone, tags, stage, total_spent, order_count, last_seen_at, whatsapp_opt_in, marketing_opt_in";
-  let { data: customers, error } = await list(`${base}, opted_out_at`);
+  let { data: customers, error } = await list(`${base}, opted_out_at, visits`);
+  if (error) ({ data: customers, error } = await list(`${base}, opted_out_at`)); // before migration 0029
   if (error) customers = (await list(base)).data; // before migration 0014
+  const { count: returning } = await supabase.from("customers").select("id", { count: "exact", head: true }).eq("business_id", business.id).gt("visits", 1)
+    .then((r) => r, () => ({ count: null }));
   const { data: stages } = await supabase.from("customers").select("stage").eq("business_id", business.id).limit(10000);
   const counts = (stages ?? []).reduce<Record<string, number>>((m, c: any) => ((m[c.stage] = (m[c.stage] ?? 0) + 1), m), {});
   const rows = (customers ?? []) as any[];
@@ -58,10 +61,11 @@ export default async function CustomersPage({ params, searchParams }: {
       </nav>
       {stage !== "all" && <p className="muted" style={{ margin: 0 }}>{ABOUT[stage]}</p>}
       {tag && <p style={{ margin: 0 }}>Tagged <span className="badge" style={{ textTransform: "none" }}>{tag}</span> <Link href={`?stage=${stage}`}>Show everyone</Link></p>}
+      {(returning ?? 0) > 0 && <p style={{ margin: 0, fontSize: 14 }}><b>{returning}</b> returning {returning === 1 ? "customer has" : "customers have"} come back to chat again.</p>}
       {rows.length > 0 && <p className="muted" style={{ margin: 0, fontSize: 14 }}>{reachable} of {rows.length} shown can get offers on WhatsApp. Customers who reply STOP only get messages about their own orders.</p>}
       <div className="table-wrap card" style={{ padding: 0 }}>
         <table>
-          <thead><tr><th>Name</th><th>WhatsApp</th><th>Stage</th><th>Offers</th><th>Orders</th><th>Total spent</th><th>Last seen</th></tr></thead>
+          <thead><tr><th>Name</th><th>WhatsApp</th><th>Stage</th><th>Offers</th><th>Orders</th><th>Visits</th><th>Total spent</th><th>Last seen</th></tr></thead>
           <tbody>
             {rows.map((c) => (
               <tr key={c.id}>
@@ -70,6 +74,7 @@ export default async function CustomersPage({ params, searchParams }: {
                 <td><span className="badge">{c.stage}</span></td>
                 <td><Consent c={c} /></td>
                 <td>{c.order_count}</td>
+                <td>{c.visits ?? 1}{(c.visits ?? 1) > 1 ? <span className="badge paid" style={{ marginLeft: 6, fontSize: 11 }}>Returning</span> : null}</td>
                 <td>{money(c.total_spent, business.currency)}</td>
                 <td className="muted">{c.last_seen_at ? new Date(c.last_seen_at).toLocaleDateString("en-BB") : "-"}</td>
               </tr>

@@ -3,7 +3,10 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createHash } from "node:crypto";
 import { downloadWhatsAppMedia, parseInbound, verifyMetaSignature } from "@/lib/whatsapp";
 import { extractOrderCode, money, needsPrice, orderReply } from "@/lib/order-text";
-import { depositNote, rentalLine } from "@/lib/rental";
+import { depositNote, mapsLink, rentalLine } from "@/lib/rental";
+import { rentalSettings } from "@/lib/rental-server";
+import { asksCatalog, asksLocation, isReturning, welcomeBack } from "@/lib/wa-intents";
+import { sendCatalog } from "@/lib/wa-catalog";
 import { dueNow } from "@/lib/part-payments";
 import { ensurePaymentLink, getIntegration, sendFromBusiness } from "@/lib/payments";
 import { claimsPaid, findReference, proofPath, transferInstructions, wantsTransfer } from "@/lib/transfer";
@@ -130,9 +133,21 @@ export async function POST(req: Request) {
       }
     }
 
-    const { count: priorInbound } = await admin
-      .from("messages").select("id", { count: "exact", head: true })
-      .eq("business_id", businessId).eq("customer_id", customerId).eq("direction", "in");
+    // Their last message before this one: none means a first-time chatter, an old one means a returning visit.
+    const { data: lastIn } = await admin
+      .from("messages").select("created_at")
+      .eq("business_id", businessId).eq("customer_id", customerId).eq("direction", "in")
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    const priorInbound = lastIn ? 1 : 0;
+    const { data: info } = await admin.from("businesses").select("name, slug, address").eq("id", businessId).maybeSingle();
+    const shopLink = `${site}/s/${info?.slug ?? ""}`;
+    let greet: string | null = null;
+    if (customerId && isReturning(lastIn?.created_at)) {
+      // Count the visit (migration 0029; skipped quietly before it has run).
+      const { data: c, error: cErr } = await admin.from("customers").select("name, visits").eq("id", customerId).maybeSingle<any>();
+      if (!cErr) await admin.from("customers").update({ visits: (c?.visits ?? 1) + 1, last_visit_at: new Date().toISOString() }).eq("id", customerId);
+      greet = welcomeBack(c?.name ?? msg.name, info?.name ?? "us");
+    }
 
     await admin.from("messages").insert({
       business_id: businessId, customer_id: customerId, order_id: orderId,
@@ -191,8 +206,22 @@ export async function POST(req: Request) {
       }
     }
 
+    // Built in on every plan: the pickup location pin, and the catalog with photos.
+    let catalogSent = false;
+    if (!reply && !code && !msg.media && msg.text) {
+      if (asksLocation(msg.text)) {
+        const pin = mapsLink((await rentalSettings(admin, businessId)).pickupMap);
+        if (pin) reply = `📍 Here's our pickup location: ${pin}${info?.address ? `\n${info.address}` : ""}`;
+        else if (info?.address) reply = `📍 We're at ${info.address}.`;
+      } else if (asksCatalog(msg.text) && customerId) {
+        if (greet) { await sendFromBusiness(admin, businessId, msg.from, greet, { customerId }); greet = null; }
+        const sent = await sendCatalog(admin, businessId, msg.from, customerId, shopLink);
+        catalogSent = sent.ok;
+      }
+    }
+
     // Automations (migration 0015): FAQ keyword answers, then the away message when closed. Growth and up.
-    const bot = !reply && !code ? await hasFeature(businessId, "wa_automations", admin) : false;
+    const bot = !reply && !code && !catalogSent ? await hasFeature(businessId, "wa_automations", admin) : false;
     if (bot) {
       const { data: faqs } = await admin.from("whatsapp_faqs").select("id, keywords, answer, active, hits").eq("business_id", businessId).eq("active", true);
       const faq = matchFaq(msg.text, (faqs ?? []) as any);
@@ -217,7 +246,7 @@ export async function POST(req: Request) {
 
     // AI product assistant (Pro and up): answers product questions from the shop's own data, or stays quiet.
     let sentBy: "ai" | undefined;
-    if (!reply && !code && customerId && !msg.media && assistantAvailable() && looksLikeQuestion(msg.text) && await hasFeature(businessId, "ai_assistant", admin)) {
+    if (!reply && !code && !catalogSent && customerId && !msg.media && assistantAvailable() && looksLikeQuestion(msg.text) && await hasFeature(businessId, "ai_assistant", admin)) {
       const { data: setting } = await admin.from("businesses").select("ai_assistant").eq("id", businessId).maybeSingle<any>();
       const since = (h: number) => new Date(Date.now() - h * 3600e3).toISOString();
       const [{ count: person, error: sbErr }, { count: aiToday }] = await Promise.all([
@@ -233,10 +262,12 @@ export async function POST(req: Request) {
     }
 
     // Only greet first-time chatters; everything else waits for a human in the inbox.
-    if (!reply && !code && (priorInbound ?? 0) === 0) {
-      if (!biz) biz = (await admin.from("businesses").select("slug").eq("id", businessId).single()).data;
-      reply = `Hi${msg.name ? " " + msg.name.split(" ")[0] : ""}! Browse and order here: ${site}/s/${biz?.slug}\nA team member will also reply soon.`;
+    if (!reply && !code && !catalogSent && priorInbound === 0) {
+      reply = `Hi${msg.name ? " " + msg.name.split(" ")[0] : ""}! Browse and order here: ${shopLink}\nA team member will also reply soon.`;
     }
+
+    // Returning visit: welcome them back, on its own or before the answer.
+    if (greet && !catalogSent) reply = reply ? `${greet}\n\n${reply}` : `${greet} How can we help today? You can see everything and book here: ${shopLink}`;
 
     if (reply) await sendFromBusiness(admin, businessId, msg.from, reply, { customerId, orderId, sentBy });
   }

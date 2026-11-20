@@ -61,7 +61,8 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
   const recentQ = (cols: string) => supabase.from("messages")
     .select(`customer_id, direction, body, created_at, channel, customers(${cols})` as "*")
     .eq("business_id", business.id).not("customer_id", "is", null).order("created_at", { ascending: false }).limit(800);
-  let { data: recent, error: rErr } = await recentQ(`${cust}, instagram_username`) as { data: any[] | null; error: any };
+  let { data: recent, error: rErr } = await recentQ(`${cust}, instagram_username, visits`) as { data: any[] | null; error: any };
+  if (rErr) ({ data: recent, error: rErr } = await recentQ(`${cust}, instagram_username`) as { data: any[] | null; error: any });
   if (rErr) recent = (await recentQ(cust)).data as any[] | null;
   const threads = new Map<string, any>();
   for (const m of recent ?? []) if (!threads.has(m.customer_id!)) threads.set(m.customer_id!, m);
@@ -105,7 +106,10 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
             <Link key={m.customer_id} className="item" href={`?c=${m.customer_id}${filter !== "all" ? `&f=${filter}` : ""}`} aria-current={m.customer_id === cid ? "true" : undefined}>
               <span className="row" style={{ justifyContent: "space-between", flexWrap: "nowrap" }}><span className="row" style={{ gap: 6, minWidth: 0 }}>{tag(m.channel)}<b style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{name(m.customers)}</b></span><span className="muted" style={{ fontSize: 12, whiteSpace: "nowrap" }}>{when(m.created_at)}</span></span>
               <span className="muted" style={{ fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{m.direction === "out" ? "You: " : ""}{m.body}</span>
-              {m.direction === "in" && <span className="badge sent" style={{ alignSelf: "flex-start" }}>Waiting for you</span>}
+              <span className="row" style={{ gap: 6 }}>
+                {m.direction === "in" && <span className="badge sent">Waiting for you</span>}
+                {(m.customers?.visits ?? 1) > 1 && <span className="badge paid">Returning · {m.customers.visits} visits</span>}
+              </span>
             </Link>
           ))}
           {!list.length && <p className="muted" style={{ padding: 14 }}>{filter === "all" ? "No chats yet. When customers message your WhatsApp number or Instagram they show up here." : "Nothing here."}</p>}
@@ -118,7 +122,7 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
                 <span className="wa-avatar" aria-hidden="true">{name(cur).replace(/^[@+]/, "").slice(0, 1).toUpperCase()}</span>
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <b className="wa-name">{name(cur)}</b>
-                  <span className="wa-sub">{cur?.phone ? `+${cur.phone} · ` : ""}{channel === "instagram" ? "Instagram" : "WhatsApp"} · {cur?.order_count ?? 0} orders{Number(cur?.total_spent ?? 0) ? ` · ${money(cur.total_spent, business.currency)} spent` : ""}</span>
+                  <span className="wa-sub">{cur?.phone ? `+${cur.phone} · ` : ""}{channel === "instagram" ? "Instagram" : "WhatsApp"}{(cur?.visits ?? 1) > 1 ? ` · Returning, ${cur.visits} visits` : ""} · {cur?.order_count ?? 0} orders{Number(cur?.total_spent ?? 0) ? ` · ${money(cur.total_spent, business.currency)} spent` : ""}</span>
                 </div>
                 <Link className="wa-profile" href={`/dashboard/${slug}/customers/${cid}`}>Profile</Link>
               </div>
