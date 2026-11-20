@@ -48,6 +48,14 @@ export function validateDates(start: string, days: number, today: string, leadDa
 }
 
 /**
+ * Pickup and return for a booking. `start` is the first day the shopper wants the items (their event date).
+ * With evening-before pickup they collect the day before, free; the return is the day after the last night either way.
+ */
+export function rentalSpan(start: string, days: number, evePickup = false) {
+  return { pickup: evePickup ? addDays(start, -1) : start, end: addDays(start, days) };
+}
+
+/**
  * Units of each product free for every day from start to end (end exclusive).
  * Each existing booking also blocks `bufferDays` after its return, for cleaning and checks.
  */

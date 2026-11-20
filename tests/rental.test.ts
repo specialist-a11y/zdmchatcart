@@ -122,3 +122,10 @@ test("packages: the cart can't take the package and its item when only one is fr
     { error: "Not enough 4K Projector free on those dates for everything in your cart. Try other dates or remove an item." });
   assert.ok(!("error" in priceRentalCart([{ productId: "k", quantity: 1 }], [pkg, one], 1, free, kits)));
 });
+
+test("evening-before pickup: collect the day before the event, return the day after, charge event nights", async () => {
+  const { rentalSpan } = await import("../lib/rental.ts");
+  assert.deepEqual(rentalSpan("2026-12-19", 1, true), { pickup: "2026-12-18", end: "2026-12-20" });
+  assert.deepEqual(rentalSpan("2026-12-19", 1, false), { pickup: "2026-12-19", end: "2026-12-20" });
+  assert.deepEqual(rentalSpan("2026-12-19", 2, true), { pickup: "2026-12-18", end: "2026-12-21" });
+});

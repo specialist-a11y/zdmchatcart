@@ -38,6 +38,7 @@ export default async function SettingsPage({ params, searchParams }: {
   const sc = (social?.config ?? {}) as { page_name?: string; ig_username?: string | null; ig_followers?: number | null; pages?: { id: string; name: string; ig: string | null }[] };
   const path = `/dashboard/${slug}/settings`;
   const { data: bank } = await createAdminClient().from("businesses").select("bank_transfer_enabled, bank_details, rental_agreement_url, rental_pickup_times, rental_lead_days, rental_buffer_days").eq("id", business.id).single();
+  const { data: eveRow } = await createAdminClient().from("businesses").select("rental_eve_pickup").eq("id", business.id).maybeSingle<any>().then((r) => r, () => ({ data: null }));
   const { count: rentalCount } = await createAdminClient().from("products").select("id", { count: "exact", head: true }).eq("business_id", business.id).eq("rental", true);
   const site = process.env.NEXT_PUBLIC_SITE_URL ?? "";
 
@@ -63,7 +64,9 @@ export default async function SettingsPage({ params, searchParams }: {
       rental_lead_days: n("rental_lead_days", 60),
       rental_buffer_days: n("rental_buffer_days", 7),
     }).eq("id", business.id);
-    redirect(`${path}?msg=${encodeURIComponent("Rental settings saved")}#rentals`);
+    // Evening-before pickup (0028) saved on its own, so the rest still saves before that migration.
+    const { error: eveErr } = await createAdminClient().from("businesses").update({ rental_eve_pickup: formData.get("rental_eve_pickup") === "on" }).eq("id", business.id);
+    redirect(`${path}?msg=${encodeURIComponent(eveErr && formData.get("rental_eve_pickup") === "on" ? "Rental settings saved. Evening-before pickup needs migration 0028_rental_evening_pickup.sql." : "Rental settings saved")}#rentals`);
   }
 
   async function disconnectSocial() {
@@ -210,6 +213,10 @@ export default async function SettingsPage({ params, searchParams }: {
         <div className="grid">
           <label>Book at least this many days ahead<input name="rental_lead_days" type="number" min="0" max="60" defaultValue={bank?.rental_lead_days ?? 1} disabled={!isAdmin} /></label>
           <label>Days blocked after each return (cleaning, checks)<input name="rental_buffer_days" type="number" min="0" max="7" defaultValue={bank?.rental_buffer_days ?? 0} disabled={!isAdmin} /></label>
+          <label className="row" style={{ gap: 8, fontWeight: 500 }}>
+            <input type="checkbox" name="rental_eve_pickup" defaultChecked={!!eveRow?.rental_eve_pickup} disabled={!isAdmin} style={{ width: "auto" }} />
+            Customers pick their event date and collect the evening before, free. They return the day after.
+          </label>
         </div>
         {isAdmin && <button className="btn" style={{ alignSelf: "flex-start" }}>Save rental settings</button>}
       </form>

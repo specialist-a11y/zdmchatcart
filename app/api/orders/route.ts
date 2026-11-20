@@ -3,14 +3,15 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { priceCart, waLink } from "@/lib/order-text";
-import { addDays, availability, expandKits, kitFree, overbooked, pickupOptions, priceRentalCart, validateDates, type Kits, type PricedLine, type RentalProduct } from "@/lib/rental";
-import { loadBookings, loadRentalCatalog } from "@/lib/rental-server";
+import { rentalSpan, addDays, availability, expandKits, kitFree, overbooked, pickupOptions, priceRentalCart, validateDates, type Kits, type PricedLine, type RentalProduct } from "@/lib/rental";
+import { evePickupOn, loadBookings, loadRentalCatalog } from "@/lib/rental-server";
 import { todayIn } from "@/lib/billing";
 import { upsertCustomer } from "@/lib/customers";
 import { shopperPhone } from "@/lib/shopper-phone";
 import { ensurePaymentLink } from "@/lib/payments";
 import { orderPath, shopperEmail } from "@/lib/order-link";
 import { notifyClient } from "@/lib/zdm-billing";
+import { preflight, withCors } from "@/lib/cors";
 import { template } from "@/lib/catalog";
 import { cleanHours } from "@/lib/hours";
 import { readZones, sharedReadyDays, slotOptions } from "@/lib/shop-front";
@@ -42,8 +43,14 @@ const Body = z.object({
   }).optional(),
 });
 
-/** Public: turn a website cart into an order with a code, then hand back a WhatsApp link. */
+export const OPTIONS = preflight;
+
+/** Public: turn a website cart into an order with a code, then hand back a WhatsApp link. Also used by a business's own website (CORS). */
 export async function POST(req: Request) {
+  return withCors(await createOrder(req));
+}
+
+async function createOrder(req: Request) {
   const parsed = Body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "Invalid order." }, { status: 400 });
   const body = parsed.data;
@@ -78,21 +85,23 @@ export async function POST(req: Request) {
   let rentalCatalog: { products: { id: string; stock: number | null }[]; kits: Kits } = { products: rentals, kits: {} };
   if (rentals.length) {
     if (!body.rental) return NextResponse.json({ error: "Pick your rental dates first." }, { status: 400 });
-    const bad = validateDates(body.rental.start, body.rental.days, todayIn(), business.rental_lead_days ?? 0);
+    // Evening-before pickup (0028): start is the event date, pickup is the day before, only event nights are charged.
+    const eve = await evePickupOn(admin, business.id);
+    const bad = validateDates(body.rental.start, body.rental.days, todayIn(), (business.rental_lead_days ?? 0) + (eve ? 1 : 0));
     if (bad) return NextResponse.json({ error: bad }, { status: 400 });
     if (business.rental_agreement_url && !body.rental.agreed) return NextResponse.json({ error: "Please accept the rental agreement." }, { status: 400 });
     const times = pickupOptions(business.rental_pickup_times);
     if (times.length && !times.includes(body.rental.pickupTime ?? "")) return NextResponse.json({ error: "Pick a pickup time." }, { status: 400 });
-    const end = addDays(body.rental.start, body.rental.days);
+    const { pickup, end } = rentalSpan(body.rental.start, body.rental.days, eve);
     rentalCatalog = await loadRentalCatalog(admin, business.id);
     const { kits } = rentalCatalog;
-    const bookings = expandKits(await loadBookings(admin, business.id, body.rental.start, end, buffer), kits);
-    const free = kitFree(availability(rentalCatalog.products, bookings, body.rental.start, end, buffer), kits);
+    const bookings = expandKits(await loadBookings(admin, business.id, pickup, end, buffer), kits);
+    const free = kitFree(availability(rentalCatalog.products, bookings, pickup, end, buffer), kits);
     const r = priceRentalCart(body.items.filter((i) => rentalIds.has(i.productId)), rentals, body.rental.days, free, kits);
     if ("error" in r) return NextResponse.json({ error: r.error }, { status: 409 });
     rentalLines = r.items;
     rentalTotal = r.subtotal;
-    rental = { start: body.rental.start, end, days: body.rental.days, unit: r.unit, deposit: r.deposit, pickupTime: body.rental.pickupTime || null, agreedAt: body.rental.agreed ? new Date().toISOString() : null };
+    rental = { start: pickup, end, days: body.rental.days, unit: r.unit, deposit: r.deposit, pickupTime: body.rental.pickupTime || null, agreedAt: body.rental.agreed ? new Date().toISOString() : null };
   }
   // Everything else (with sizes and stock limits) is priced as usual.
   const others = body.items.filter((i) => !rentalIds.has(i.productId));
@@ -198,7 +207,9 @@ export async function POST(req: Request) {
   if (body.noWhatsapp) {
     const site = (process.env.NEXT_PUBLIC_SITE_URL ?? "").replace(/\/$/, "");
     await notifyClient(admin, business.id, `New order ${code} from ${body.name?.trim() || "a customer"} who doesn't use WhatsApp. Call +${phone} or email ${email}. ${site}/dashboard/${body.slug}/orders/${code}`).catch(() => null);
-    return NextResponse.json({ code, orderUrl: orderPath(order.id) });
+    const path = orderPath(order.id);
+    // orderUrl is a path for the shop page; orderLink is absolute for a business's own website.
+    return NextResponse.json({ code, orderUrl: path, orderLink: `${site}${path}` });
   }
 
   // Pay now: straight to the Fygaro card page. Falls back to WhatsApp if there's no link (price to confirm, or Fygaro not set up).

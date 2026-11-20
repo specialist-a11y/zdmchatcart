@@ -28,3 +28,9 @@ export async function loadRentalCatalog(admin: SupabaseClient, businessId: strin
   const rows = (error ? (await base()).data : data) ?? [];
   return { products: rows.map((r: any) => ({ id: r.id, name: r.name, stock: r.stock })), kits: kitsFrom(rows as any[]) };
 }
+
+/** Evening-before pickup (migration 0028); false until it has run. */
+export async function evePickupOn(admin: SupabaseClient, businessId: string) {
+  const { data, error } = await admin.from("businesses").select("rental_eve_pickup").eq("id", businessId).maybeSingle<any>();
+  return !error && !!data?.rental_eve_pickup;
+}

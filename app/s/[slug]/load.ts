@@ -22,6 +22,11 @@ export const loadShop = cache(async (slug: string) => {
     if (!error) { business = data; break; }
   }
   if (!business) return null;
+  // Evening-before pickup (0028), read on its own so an older database still loads the shop.
+  if (hasServiceRoleKey()) {
+    const { data: eve, error: eveErr } = await createAdminClient().from("businesses").select("rental_eve_pickup").eq("id", business.id).maybeSingle<any>();
+    if (!eveErr) business.rental_eve_pickup = !!eve?.rental_eve_pickup;
+  }
   const q = (cols: string) => supabase.from("products").select(cols).eq("business_id", business!.id).eq("active", true).order("sort_order").order("created_at");
   const p1 = "id, name, description, price, image_url, stock, kind, category, price_note, variants";
   let products: any[] | null = null;
