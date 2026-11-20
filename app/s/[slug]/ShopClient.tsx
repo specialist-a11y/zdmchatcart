@@ -697,6 +697,11 @@ export default function ShopClient({ business, products, attribution, previewTem
                   <button type="button" aria-pressed={hasWa} onClick={() => { setHasWa(true); setError(""); }}>Yes</button>
                   <button type="button" aria-pressed={!hasWa} onClick={() => { setHasWa(false); setError(""); }}>No</button>
                 </div>
+                <span style={{ fontSize: 14, color: "var(--muted)" }}>
+                  {hasWa
+                    ? <><b>Fastest way to order.</b> We confirm in the chat, and your receipt{cartHasRental ? " and pickup location pin" : ""} arrive right there. Questions get answered in the same chat.</>
+                    : <>No problem. You&apos;ll get an order page to pay and check your order. With WhatsApp, your confirmation and receipt come straight to your phone.</>}
+                </span>
               </div>
 
               {/* How to pay: card and/or 1st Pay, whichever the shop has set up. */}
